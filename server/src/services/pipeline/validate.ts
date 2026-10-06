@@ -133,6 +133,8 @@ export function checkImports(code: string, screenFileNames: Set<string>): Violat
     '../lib/store',
     // Emitted when a screen receives a response the documents never described.
     '../lib/read',
+    // The AI builder's typed navigation between screens.
+    '../lib/flow',
   ])
 
   const violations: Violation[] = []

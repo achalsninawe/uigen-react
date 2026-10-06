@@ -106,13 +106,21 @@ async function prepareSandbox(log: (m: string) => void): Promise<string> {
 
     if (!installed) {
       log('Preparing the type-check sandbox (one-off, about a minute)')
-      // npm.cmd rather than `shell: true`: passing args through a shell means
-      // they are concatenated rather than escaped, which Node now warns about.
-      const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-      await run(npm, ['install', '--no-audit', '--no-fund', '--loglevel=error'], {
-        cwd: dir,
-        maxBuffer: 16 * 1024 * 1024,
-      })
+      const args = ['install', '--no-audit', '--no-fund', '--loglevel=error']
+      const options = { cwd: dir, maxBuffer: 16 * 1024 * 1024 }
+      if (process.platform === 'win32') {
+        /*
+         * npm's own script, run by this Node. Node 20.12+ refuses to launch a
+         * .cmd without a shell (EINVAL), and a shell would concatenate the
+         * arguments rather than escape them.
+         */
+        const cli = process.env.npm_execpath?.endsWith('.js')
+          ? process.env.npm_execpath
+          : path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+        await run(process.execPath, [cli, ...args], options)
+      } else {
+        await run('npm', args, options)
+      }
     }
 
     return dir

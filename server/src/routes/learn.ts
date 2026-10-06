@@ -5,7 +5,9 @@ import { store } from '../services/store.js'
 import { recordCall } from '../services/netlog.js'
 import { callUpstream, type CallPayload } from '../services/upstream.js'
 import { applyObservedShape } from '../services/pipeline/probe.js'
+import { testAllEndpoints, testEndpoint } from '../services/pipeline/testApis.js'
 import { toWireProject } from '../serialize.js'
+import type { Endpoint, EndpointTest } from '../types.js'
 
 export const learnRouter = Router()
 
@@ -89,5 +91,72 @@ learnRouter.post(
       durationMs: outcome.durationMs,
       project: toWireProject(project),
     })
+  }),
+)
+
+/** Logs a test call in the network panel, like any other call the studio makes. */
+function logTest(projectId: string, endpoint: Endpoint, test: EndpointTest) {
+  if (test.state === 'skipped' || !test.url) return
+  recordCall(projectId, {
+    operationId: endpoint.operationId,
+    method: endpoint.method,
+    url: test.url,
+    status: test.status ?? 0,
+    durationMs: test.durationMs ?? 0,
+    at: test.at,
+    ...(test.status === undefined ? { error: test.message } : {}),
+    ...(test.typeName ? { learned: test.typeName } : {}),
+  })
+}
+
+/**
+ * Tests one endpoint with what the person typed.
+ *
+ * Unlike Learn this never answers with an error for an upstream failure: a
+ * 401 is a result worth showing in red on the card, not a broken request.
+ */
+learnRouter.post(
+  '/:id/endpoints/:operationId/test',
+  asyncRoute(async (req, res) => {
+    const id = param(req, 'id')
+    const project = await ownedProject(req, id)
+    const endpoint = project.appSpec?.endpoints.find((e) => e.operationId === param(req, 'operationId'))
+    if (!endpoint || !project.appSpec) throw notFound(`No endpoint named "${param(req, 'operationId')}"`)
+
+    const input = (req.body ?? {}) as CallPayload
+    const test = await testEndpoint(project.appSpec, endpoint, project.connection, input)
+    // Kept so Test all can repeat a call with real values instead of the documents' examples.
+    endpoint.lastTestInput = {
+      ...(input.pathParams ? { pathParams: input.pathParams } : {}),
+      ...(input.query ? { query: input.query } : {}),
+      ...(input.body !== undefined ? { body: input.body } : {}),
+    }
+    logTest(id, endpoint, test)
+
+    // Screens were generated against the old shape.
+    if (test.typeName && project.status === 'ready') project.status = 'analyzed'
+    await store.save(project)
+    res.json({ test, project: toWireProject(project) })
+  }),
+)
+
+/** Tests every endpoint it can. Writes only when `includeWrites` is true. */
+learnRouter.post(
+  '/:id/endpoints/test-all',
+  asyncRoute(async (req, res) => {
+    const id = param(req, 'id')
+    const project = await ownedProject(req, id)
+    if (!project.appSpec) throw badRequest('Read the documents before testing their APIs')
+
+    const includeWrites = (req.body as { includeWrites?: unknown } | undefined)?.includeWrites === true
+    let learned = false
+    await testAllEndpoints(project.appSpec, project.connection, { includeWrites }, (endpoint, test) => {
+      logTest(id, endpoint, test)
+      if (test.typeName) learned = true
+    })
+
+    if (learned && project.status === 'ready') project.status = 'analyzed'
+    await store.save(project)
+    res.json({ project: toWireProject(project) })
   }),
 )

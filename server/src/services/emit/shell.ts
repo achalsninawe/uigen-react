@@ -1,7 +1,8 @@
 import { BFF_PORT, wantsBff } from './bff.js'
 import { str, toPascalCase } from './lang.js'
 import type { EmitContext } from './apiClient.js'
-import type { AppPlan, AppSpec, ScreenPlan } from '../../types.js'
+import { DEFAULT_FONT_URL, brandTokens, fontStack } from '../brand.js'
+import { ROOT_SIZE, type AppPlan, type AppSpec, type ScreenPlan } from '../../types.js'
 
 /** Component/file name for a screen, e.g. `OrderDetail`. */
 export function screenComponentName(screen: ScreenPlan): string {
@@ -128,7 +129,8 @@ export function emitTsConfig(): string {
   )}\n`
 }
 
-export function emitIndexHtml(appSpec: AppSpec): string {
+export function emitIndexHtml(appSpec: AppSpec, plan?: AppPlan): string {
+  const fontUrl = plan?.theme.brand?.font?.url ?? DEFAULT_FONT_URL
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -139,7 +141,7 @@ export function emitIndexHtml(appSpec: AppSpec): string {
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      href="${escapeHtml(fontUrl)}"
       rel="stylesheet"
     />
   </head>
@@ -164,6 +166,19 @@ function escapeHtml(value: string): string {
 /* ------------------------------------------------------------------ */
 
 export function emitIndexCss(plan: AppPlan): string {
+  const brand = plan.theme.brand
+  /*
+   * An uploaded brand overrides tokens rather than adding classes: the kit's
+   * slate text, hairlines and radii are redefined here, so every component
+   * picks the brand up without the screens knowing it exists.
+   */
+  const brandBlock = brand
+    ? `
+
+  /* Brand theme, read from ${brand.sources.join(', ').replace(/\*\//g, '')} */
+  ${brandTokens(brand).join('\n  ')}`
+    : ''
+
   return `@import 'tailwindcss';
 
 /*
@@ -174,7 +189,7 @@ export function emitIndexCss(plan: AppPlan): string {
  * nothing.
  */
 @theme static {
-  --font-sans: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: ${fontStack(brand?.font?.body)};
 
   /*
    * One colour decides the palette.
@@ -190,17 +205,28 @@ export function emitIndexCss(plan: AppPlan): string {
   --color-accent-tint: color-mix(in oklab, var(--color-accent) 6%, white);
   --color-accent-deep: color-mix(in oklab, var(--color-accent) 58%, #12101f);
   --color-canvas: color-mix(in oklab, var(--color-accent) 4%, white);
-  --color-line: color-mix(in oklab, var(--color-accent) 14%, white);
+  --color-line: color-mix(in oklab, var(--color-accent) 14%, white);${brandBlock}${
+    // After the brand's, so the person's choice wins over the brand guide's.
+    plan.theme.rootSize ? `
+
+  /* Text size chosen in the studio */
+  --brand-root-size: ${plan.theme.rootSize}px;` : ''
+  }
 }
 
 @layer base {
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    font-size: var(--brand-root-size, 16px);
   }
 
   body {
     @apply bg-canvas font-sans text-slate-900 antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading, var(--font-sans));
   }
 
   :focus-visible {
@@ -279,6 +305,36 @@ const SAFE_ICONS = new Set([
 
 const safeIcon = (icon: string) => (SAFE_ICONS.has(icon) ? icon : 'Square')
 
+/**
+ * A screen's own look, as an inline style on the element around it.
+ *
+ * The palette tokens are mixed from the accent where they are declared, so a
+ * new accent has to bring its derived tokens with it or the washes and lines
+ * would keep the app's colour. Text sizes are rem, relative to the app's root,
+ * so a screen's own size is a zoom by the ratio of the two.
+ */
+function lookStyle(screen: ScreenPlan, plan: AppPlan): string | undefined {
+  const look = screen.look
+  if (!look) return undefined
+  const entries: string[] = []
+  if (look.accent) {
+    const a = look.accent
+    entries.push(
+      `'--color-accent': ${str(a)}`,
+      `'--color-accent-soft': ${str(`color-mix(in oklab, ${a} 16%, white)`)}`,
+      `'--color-accent-tint': ${str(`color-mix(in oklab, ${a} 6%, white)`)}`,
+      `'--color-accent-deep': ${str(`color-mix(in oklab, ${a} 58%, #12101f)`)}`,
+      `'--color-canvas': ${str(`color-mix(in oklab, ${a} 4%, white)`)}`,
+      `'--color-line': ${str(`color-mix(in oklab, ${a} 14%, white)`)}`,
+    )
+  }
+  if (look.textSize) {
+    const zoom = ROOT_SIZE[look.textSize] / (plan.theme.rootSize ?? ROOT_SIZE.default)
+    if (Math.abs(zoom - 1) > 0.001) entries.push(`zoom: ${+zoom.toFixed(4)}`)
+  }
+  return entries.length > 0 ? `{ ${entries.join(', ')} }` : undefined
+}
+
 export function emitApp(plan: AppPlan): string {
   const screens = plan.screens
   const imports = screens
@@ -286,13 +342,19 @@ export function emitApp(plan: AppPlan): string {
     .join('\n')
 
   const routes = screens
-    .map((s) => `        <Route path=${str(s.route)} element={<${screenComponentName(s)} />} />`)
+    .map((s) => {
+      const element = `<${screenComponentName(s)} />`
+      const style = lookStyle(s, plan)
+      const wrapped = style ? `<div style={${style} as CSSProperties}>${element}</div>` : element
+      return `        <Route path=${str(s.route)} element={${wrapped}} />`
+    })
     .join('\n')
+  const styled = screens.some((s) => lookStyle(s, plan))
 
   // Send unknown paths to the first navigable screen rather than a blank page.
   const home = screens.find((s) => s.route === '/') ?? screens.find((s) => s.showInNav) ?? screens[0]
 
-  return `import { Routes, Route, Navigate } from 'react-router-dom'
+  return `${styled ? "import type { CSSProperties } from 'react'\n" : ''}import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 ${imports}
 
@@ -363,7 +425,7 @@ function emitJourneyLayout(appSpec: AppSpec, journey: ScreenPlan[]): string {
   const blurb = appSpec.description?.trim()
     ? `
         <div className="mx-5 mb-6 rounded-2xl bg-accent-tint p-4 ring-1 ring-line">
-          <p className="text-[12.5px] leading-relaxed text-slate-600">
+          <p className="text-[0.7813rem] leading-relaxed text-slate-600">
             ${escapeJsxText(appSpec.description.trim())}
           </p>
         </div>
@@ -402,7 +464,7 @@ function Step({
     <>
       <span
         className={cn(
-          'z-10 grid size-[1.625rem] shrink-0 place-items-center rounded-full text-[11.5px] font-bold ring-1',
+          'z-10 grid size-[1.625rem] shrink-0 place-items-center rounded-full text-[0.7188rem] font-bold ring-1',
           active
             ? 'bg-accent text-white ring-accent'
             : done
@@ -421,13 +483,13 @@ function Step({
       <span className="min-w-0 pt-0.5">
         <span
           className={cn(
-            'block truncate text-[13.5px] font-semibold',
+            'block truncate text-[0.8438rem] font-semibold',
             active ? 'text-slate-900' : 'text-slate-600',
           )}
         >
           {step.label}
         </span>
-        <span className="mt-0.5 hidden truncate text-[11.5px] text-slate-400 lg:block">
+        <span className="mt-0.5 hidden truncate text-[0.7188rem] text-slate-400 lg:block">
           {step.caption}
         </span>
       </span>
@@ -468,10 +530,10 @@ export default function Layout({ children }: { children: ReactNode }) {
     <div className="min-h-dvh lg:flex">
       <aside className="shrink-0 border-b border-line bg-white/70 lg:h-dvh lg:w-72 lg:border-r lg:border-b-0">
         <div className="px-6 pt-7 pb-5">
-          <p className="text-[10.5px] font-semibold tracking-[0.16em] text-accent uppercase">
+          <p className="text-[0.6563rem] font-semibold tracking-[0.16em] text-accent uppercase">
             Your progress
           </p>
-          <h1 className="mt-2 text-[22px] leading-tight font-bold tracking-tight text-slate-900">
+          <h1 className="mt-2 text-[1.375rem] leading-tight font-bold tracking-tight text-slate-900">
             ${escapeJsxText(appSpec.appName)}
           </h1>
         </div>
@@ -497,7 +559,7 @@ ${blurb}      </aside>
 
       <main className="min-w-0 flex-1">
         <div className="mx-auto max-w-6xl px-5 py-8 lg:px-10">
-          <p className="mb-7 flex items-center gap-2 text-[12px] text-slate-400">
+          <p className="mb-7 flex items-center gap-2 text-[0.75rem] text-slate-400">
             <span>${escapeJsxText(appSpec.appName)}</span>
             <span aria-hidden>/</span>
             <span className="font-medium text-slate-600">{steps[current]?.label}</span>
@@ -553,7 +615,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <span className="grid size-9 place-items-center rounded-xl bg-accent text-sm font-bold text-white shadow-sm">
             ${escapeJsxText(initial)}
           </span>
-          <span className="truncate text-[15px] font-bold tracking-tight text-slate-900">
+          <span className="truncate text-[0.9375rem] font-bold tracking-tight text-slate-900">
             ${escapeJsxText(appSpec.appName)}
           </span>
         </div>
@@ -566,7 +628,7 @@ export default function Layout({ children }: { children: ReactNode }) {
               end={to === '/'}
               className={({ isActive }) =>
                 cn(
-                  'flex shrink-0 items-center gap-2.5 rounded-xl px-3 py-2 text-[13.5px] font-medium transition-colors',
+                  'flex shrink-0 items-center gap-2.5 rounded-xl px-3 py-2 text-[0.8438rem] font-medium transition-colors',
                   isActive
                     ? 'bg-accent-soft text-accent'
                     : 'text-slate-600 hover:bg-accent-tint hover:text-slate-900',
@@ -582,7 +644,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
       <main className="min-w-0 flex-1">
         <div className="mx-auto max-w-6xl px-5 py-8 lg:px-10">
-          <p className="mb-7 flex items-center gap-2 text-[12px] text-slate-400">
+          <p className="mb-7 flex items-center gap-2 text-[0.75rem] text-slate-400">
             <span>${escapeJsxText(appSpec.appName)}</span>
             <span aria-hidden>/</span>
             <span className="font-medium text-slate-600">{current?.label ?? ''}</span>

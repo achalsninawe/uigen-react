@@ -19,15 +19,18 @@ import { SavePanel } from '@/components/SavePanel'
 import { ExportPanel } from '@/components/ExportPanel'
 import { ConnectionPanel } from '@/components/ConnectionPanel'
 import { SampleDataToggle } from '@/components/SampleDataToggle'
+import { GeneratorToggle, type Generator } from '@/components/GeneratorToggle'
+import { ThemePanel, ThemeUploadButton } from '@/components/ThemePanel'
 import { NetworkLog } from '@/components/NetworkLog'
 import { StepRail, type StepKey } from '@/components/StepRail'
 import { ActivityLog, type LogLine } from '@/components/ActivityLog'
-import { EndpointCard } from '@/components/EndpointCard'
+import { EndpointsSection } from '@/components/EndpointsSection'
+import { AppColorPicker, TextSizePicker } from '@/components/AppColorPicker'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { analyzeUrl, api, generateUrl, repairUrl, streamPipeline } from '@/lib/api'
-import type { ConnectionSettings, Endpoint, Gap, PipelineEvent, Project as ProjectType } from '@/lib/types'
+import { generatorFor, type ConnectionSettings, type Endpoint, type Gap, type PipelineEvent, type Project as ProjectType } from '@/lib/types'
 import { cn } from '@/lib/cn'
 
 /** One finished run: what it was, what it produced, when. */
@@ -139,6 +142,8 @@ export default function Project() {
   const [fixing, setFixing] = useState(false)
   const [fixNote, setFixNote] = useState('')
   const [fixMode, setFixMode] = useState<'fix' | 'refine'>('fix')
+  // Empty means every screen gets a look; otherwise only this one is changed.
+  const [fixScreen, setFixScreen] = useState('')
 
   /*
    * What has finished, kept after the log scrolls on.
@@ -241,31 +246,41 @@ export default function Project() {
   )
 
   const runRepair = useCallback(
-    async (note: string, mode: 'fix' | 'refine' = 'fix') => {
+    async (note: string, mode: 'fix' | 'refine' = 'fix', screenId?: string) => {
       setRunning('generate')
       setFatal(null)
-      const stream = streamPipeline(repairUrl(id, note || undefined, mode), handleEvent)
+      const stream = streamPipeline(repairUrl(id, note || undefined, mode, screenId), handleEvent)
+      const screen = screenId ? project?.plan?.screens.find((s) => s.id === screenId)?.name : undefined
       try {
         await stream.promise
-        finish(mode === 'refine' ? 'Screens refined' : 'Screens fixed')
+        finish(
+          screen
+            ? `${screen} ${mode === 'refine' ? 'refined' : 'fixed'}`
+            : mode === 'refine'
+              ? 'Screens refined'
+              : 'Screens fixed',
+        )
       } catch (err) {
         setFatal(err instanceof Error ? err.message : 'Could not change the screens')
       } finally {
         setRunning(null)
       }
     },
-    [id, handleEvent, finish],
+    [id, handleEvent, finish, project?.plan],
   )
 
-  const reloadProject = useCallback(() => {
-    api
-      .getProject(id)
-      .then((loaded) => {
-        setProject(loaded)
-        setEndpoints(loaded.appSpec?.endpoints ?? [])
-      })
-      .catch(() => {})
-  }, [id])
+  /** Takes a project the server sent back after an edit or a test. */
+  const takeProject = useCallback((next: ProjectType) => {
+    setProject(next)
+    setEndpoints(next.appSpec?.endpoints ?? [])
+  }, [])
+
+  /** Opens the fix dialog, optionally already pointed at one screen. */
+  const openFix = useCallback((screenId = '', mode: 'fix' | 'refine' = 'fix') => {
+    setFixScreen(screenId)
+    setFixMode(mode)
+    setFixing(true)
+  }, [])
 
   const saveConnection = useCallback(
     async (next: ConnectionSettings) => {
@@ -288,6 +303,42 @@ export default function Project() {
     },
     [id],
   )
+
+  const saveGenerator = useCallback(
+    async (next: Generator) => {
+      let previous: Generator | undefined
+      setProject((prev) => {
+        // The stored value, not the resolved one: a failed save must put back "not chosen".
+        previous = prev?.generator
+        return prev ? { ...prev, generator: next } : prev
+      })
+      try {
+        const updated = await api.setGenerator(id, next)
+        setProject((prev) => (prev ? { ...prev, generator: updated.generator } : updated))
+      } catch {
+        setProject((prev) => (prev ? { ...prev, generator: previous } : prev))
+      }
+    },
+    [id],
+  )
+
+  // Only the theme is taken from the reply, like the other settings above.
+  const uploadTheme = useCallback(
+    async (files: File[]) => {
+      const updated = await api.uploadTheme(id, files)
+      setProject((prev) => (prev ? { ...prev, brandTheme: updated.brandTheme } : updated))
+    },
+    [id],
+  )
+
+  const removeTheme = useCallback(async () => {
+    await api.removeTheme(id)
+    setProject((prev) => {
+      if (!prev) return prev
+      const { brandTheme: _removed, ...rest } = prev
+      return rest
+    })
+  }, [id])
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => {})
@@ -448,28 +499,15 @@ export default function Project() {
           </motion.div>
         )}
 
-        {/* Endpoints */}
-        {endpoints.length > 0 && (
-          <section className="mb-6">
-            <div className="mb-3 flex items-baseline justify-between">
-              <h2 className="text-[15px] font-bold text-ink">
-                Endpoints <span className="ml-1 text-muted">{endpoints.length}</span>
-              </h2>
-              <p className="text-[12px] text-muted">extracted exactly as documented</p>
-            </div>
-            <div className="space-y-2">
-              {endpoints.map((endpoint, i) => (
-                <EndpointCard
-                  key={endpoint.id}
-                  endpoint={endpoint}
-                  index={i}
-                  projectId={id}
-                  onLearned={reloadProject}
-                />
-              ))}
-            </div>
-          </section>
-        )}
+        {/* Endpoints: test, edit, add and remove before any screen is written */}
+        <EndpointsSection
+          projectId={id}
+          appSpec={appSpec}
+          endpoints={endpoints}
+          busy={Boolean(running)}
+          appIsStale={hasApp && project?.status === 'analyzed'}
+          onProject={takeProject}
+        />
 
         {/*
          * Data shapes and user flows are not shown.
@@ -511,13 +549,47 @@ export default function Project() {
                 {project.plan && (
                   <ul className="px-5 pb-2">
                     {project.plan.screens.map((screen) => (
-                      <li key={screen.id} className="flex items-center gap-2.5 py-1.5">
+                      <li key={screen.id} className="group flex items-center gap-2.5 py-1.5">
                         <RouteIcon className="size-3.5 shrink-0 text-faint" />
                         <span className="text-[13px] font-medium text-ink">{screen.name}</span>
                         <code className="font-mono text-[11.5px] text-muted">{screen.route}</code>
+                        {screen.look && (
+                          <span
+                            title="This screen has its own style"
+                            className="inline-flex items-center gap-1 rounded-full bg-canvas-deep px-2 py-0.5 text-[10.5px] font-semibold text-muted"
+                          >
+                            {screen.look.accent && (
+                              <span className="size-2 rounded-full" style={{ background: screen.look.accent }} />
+                            )}
+                            {screen.look.textSize ? `${screen.look.textSize} text` : 'own color'}
+                          </span>
+                        )}
+                        {!running && health?.ai !== 'mock' && (
+                          <button
+                            type="button"
+                            onClick={() => openFix(screen.id, 'refine')}
+                            className="ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11.5px] font-semibold text-primary opacity-60 transition-opacity group-hover:opacity-100 hover:bg-primary-soft"
+                          >
+                            <Pencil className="size-3" /> Edit this screen
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
+                )}
+                {project.plan && (
+                  <AppColorPicker
+                    value={project.plan.theme.accent}
+                    disabled={Boolean(running)}
+                    onChange={async (hex) => takeProject(await api.setAccent(id, hex))}
+                  />
+                )}
+                {project.plan && (
+                  <TextSizePicker
+                    value={project.textSize}
+                    disabled={Boolean(running)}
+                    onChange={async (next) => takeProject(await api.setTextSize(id, next))}
+                  />
                 )}
                 <div className="max-h-48 overflow-y-auto border-t border-line-soft px-5 py-3">
                   {project.files.map((f) => (
@@ -553,7 +625,7 @@ export default function Project() {
 
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
               <div className="min-w-0">
-                <PreviewPane files={project.files} projectId={id} />
+                <PreviewPane files={project.files} projectId={id} appSpec={appSpec} />
                 <SavePanel
                   name={project.name}
                   savedAt={project.savedAt}
@@ -581,11 +653,19 @@ export default function Project() {
 
         {/* Actions */}
         {hasSpec && !running && project && (
-          <SampleDataToggle
-            className="mb-3 max-w-xl"
-            checked={project.sampleData === true}
-            onChange={(next) => void saveSampleData(next)}
-          />
+          <div className="mb-3 grid max-w-3xl gap-3 md:grid-cols-2">
+            <GeneratorToggle
+              value={generatorFor(project)}
+              onChange={(next) => void saveGenerator(next)}
+            />
+            <SampleDataToggle
+              checked={project.sampleData === true}
+              onChange={(next) => void saveSampleData(next)}
+            />
+            {project.brandTheme && (
+              <ThemePanel theme={project.brandTheme} onRemove={removeTheme} className="md:col-span-2" />
+            )}
+          </div>
         )}
         {hasSpec && !running && (
           <div className="flex flex-wrap items-center gap-3">
@@ -593,13 +673,19 @@ export default function Project() {
               <Sparkles className="size-4" />
               {hasApp ? 'Regenerate app' : 'Generate the app'}
             </Button>
+            {/* Style files are not specification, so they are uploaded here, not with the documents. */}
+            <ThemeUploadButton
+              hasTheme={Boolean(project?.brandTheme)}
+              onUpload={uploadTheme}
+              disabled={health?.ai === 'mock'}
+            />
             {/*
               Fixing is not regenerating. Regenerate re-rolls every screen and
               loses the ones that were already right; this keeps them and works
               on what is broken.
             */}
             {hasApp && (
-              <Button size="lg" variant="outline" onClick={() => setFixing(true)} disabled={health?.ai === 'mock'}>
+              <Button size="lg" variant="outline" onClick={() => openFix()} disabled={health?.ai === 'mock'}>
                 <Wrench className="size-4" />
                 Fix or refine
               </Button>
@@ -670,10 +756,33 @@ export default function Project() {
                   ))}
                 </div>
 
+                {/*
+                  Naming the screen is what keeps the rest of the app as it is:
+                  without it every screen is shown the note and may change.
+                */}
+                {project?.plan && (
+                  <label className="mt-4 block">
+                    <span className="mb-1 block text-[12px] font-semibold text-ink-soft">Which screen?</span>
+                    <select
+                      value={fixScreen}
+                      onChange={(e) => setFixScreen(e.target.value)}
+                      className="h-10 w-full rounded-xl bg-white px-3 text-sm text-ink ring-1 ring-line focus:ring-2 focus:ring-primary focus:outline-none"
+                    >
+                      <option value="">All screens (it finds the right one)</option>
+                      {project.plan.screens.map((screen) => (
+                        <option key={screen.id} value={screen.id}>
+                          {screen.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
                 <p className="mt-3 text-[13px] leading-relaxed text-muted">
+                  {fixScreen ? 'Only this screen will change. ' : ''}
                   {fixMode === 'fix'
                     ? 'Describe what you saw — an error, an empty field, a button that does nothing. Changes stay as small as possible.'
-                    : 'Say how it should look — reorder fields, group them, widen a table, change wording. Layout may be restructured; the data it reads cannot.'}
+                    : 'Say how it should look — reorder fields, group them, widen a table, change wording. Layout may be restructured; the data it reads cannot. Colour and text size requests ("make it blue", "smaller font") change the screen you picked, or the whole app when none is picked.'}
                 </p>
 
                 <textarea
@@ -685,7 +794,7 @@ export default function Project() {
                   placeholder={
                     fixMode === 'fix'
                       ? 'Total Refund Amount shows an error instead of the value'
-                      : 'Put the refund amounts in one card, and show the policy dates side by side'
+                      : 'Make it blue, smaller font, and show the policy dates side by side'
                   }
                   className="mt-3 w-full resize-y rounded-xl bg-white px-3.5 py-2.5 text-sm text-ink ring-1 ring-line transition-shadow placeholder:text-faint focus:ring-2 focus:ring-primary focus:outline-none"
                 />
@@ -695,10 +804,10 @@ export default function Project() {
                     Cancel
                   </Button>
                   <Button
-                    disabled={!fixNote.trim() && fixMode === 'refine'}
+                    disabled={!fixNote.trim() && (fixMode === 'refine' || Boolean(fixScreen))}
                     onClick={() => {
                       setFixing(false)
-                      void runRepair(fixNote.trim(), fixMode)
+                      void runRepair(fixNote.trim(), fixMode, fixScreen || undefined)
                     }}
                   >
                     <Wrench className="size-4" />

@@ -55,6 +55,11 @@ export interface SpecDocument {
   uploadedAt: string
 }
 
+export type TextSize = 'small' | 'default' | 'large'
+
+/** Root font size for each choice; the kit sizes text in rem, so this scales all of it. */
+export const ROOT_SIZE: Record<TextSize, number> = { small: 14, default: 16, large: 17.5 }
+
 export interface ParamSpec {
   name: string
   in: 'path' | 'query' | 'header' | 'cookie'
@@ -131,6 +136,38 @@ export interface Endpoint {
   sourceDocumentId?: string
   /** True when a human edited this endpoint in the inspector. */
   edited?: boolean
+  /** The most recent live test of this endpoint, if one has run. */
+  lastTest?: EndpointTest
+  /**
+   * What the person typed the last time they tested this endpoint on its own.
+   * Test all sends these rather than the documents' examples, which are
+   * usually invented values ("P001234567") the real system does not have.
+   */
+  lastTestInput?: TestInput
+}
+
+export interface TestInput {
+  pathParams?: Record<string, unknown>
+  query?: Record<string, unknown>
+  body?: unknown
+}
+
+/**
+ * One live call made to check an endpoint works.
+ *
+ * `skipped` means it was never called — a write when writes were not allowed,
+ * or a path parameter nothing could supply — and says why in `message`.
+ */
+export interface EndpointTest {
+  state: 'pass' | 'fail' | 'skipped'
+  message: string
+  at: string
+  status?: number
+  durationMs?: number
+  url?: string
+  /** Set when a 2xx response taught the endpoint its response shape. */
+  typeName?: string
+  fields?: number
 }
 
 export interface EntityField {
@@ -229,6 +266,11 @@ export interface AppSpec {
   documentedScreens: DocumentedScreen[]
   /** Base URLs mentioned anywhere in the docs, most common first. */
   servers: string[]
+  /**
+   * 'manual' once someone has put the endpoints in order by hand. Test all then
+   * calls them in exactly that order instead of reads-first, lists-first.
+   */
+  callOrder?: 'manual'
 }
 
 export type ScreenType =
@@ -297,6 +339,12 @@ export interface ScreenPlan {
    * feed this screen, and invented values are not allowed, so it says so.
    */
   unsourced?: boolean
+  /** AI builder only: the design's brief for this screen. */
+  brief?: string
+  /** AI builder only: the router-state type this screen receives, over `T.*` types. */
+  receives?: string
+  /** AI builder only: names of the screens this one navigates to. */
+  navigatesTo?: string[]
   /**
    * Where this screen sits in the journey, when the plan reads as a sequence
    * rather than a set of destinations.
@@ -334,6 +382,51 @@ export interface ScreenPlan {
    * is the common case.
    */
   covers?: string[]
+  /** This screen's own colour and text size, over the app's. */
+  look?: ScreenLook
+}
+
+/** A screen's own styling. Either part may be absent, meaning the app's. */
+export interface ScreenLook {
+  accent?: string
+  textSize?: TextSize
+}
+
+/**
+ * A brand's look, read out of a style document the person uploaded.
+ *
+ * Every value is optional except the primary colour, and every value that
+ * reaches a stylesheet has been sanitised — these are written into CSS, so a
+ * "colour" that closes the declaration is refused, not escaped.
+ */
+export interface BrandTheme {
+  /** Filenames it was read from. */
+  sources: string[]
+  extractedAt: string
+  colors: {
+    primary: string
+    /** Page background. */
+    background?: string
+    /** Body text. */
+    text?: string
+    /** Secondary text: captions, labels, hints. */
+    muted?: string
+    border?: string
+    danger?: string
+    success?: string
+  }
+  font?: {
+    body?: string
+    heading?: string
+    /** A Google Fonts stylesheet that loads them. */
+    url?: string
+    /** Root font size in px; everything in the kit is sized in rem from it. */
+    baseSize?: number
+  }
+  /** Corner radius of a standard control, in px. */
+  radius?: number
+  /** Style rules the tokens cannot carry: "buttons are uppercase", "no shadows". */
+  notes: string[]
 }
 
 export interface AppPlan {
@@ -343,10 +436,16 @@ export interface AppPlan {
     accent: string
     mood: 'calm' | 'vivid' | 'corporate' | 'playful'
     density: 'comfortable' | 'compact'
+    /** The uploaded brand, when there is one. It decides the palette and type. */
+    brand?: BrandTheme
+    /** Root font size in px, when the person chose one. Every size in the kit is relative to it. */
+    rootSize?: number
   }
   designNotes: string[]
   /** The project's `sampleData` setting this plan was made under. */
   sampleData?: boolean
+  /** Which generator made it. Absent means the classic pipeline. */
+  builder?: 'classic' | 'ai'
 }
 
 /** A file in the generated app. */
@@ -391,6 +490,25 @@ export interface Project {
    */
   sampleData?: boolean
   /**
+   * Which generator builds the app, when the person has chosen. Absent means
+   * the default for the documents — see `generatorFor`.
+   */
+  generator?: 'classic' | 'ai'
+  /** Brand theme read from an uploaded style document. Applies on the next generate. */
+  brandTheme?: BrandTheme
+  /**
+   * The app's colour, when the person picked one. Applied to the built app at
+   * once and kept through regenerating, over the planner's and the brand's.
+   */
+  accent?: string
+  /** How large the app's text is, when the person chose. Kept through regenerating. */
+  textSize?: TextSize
+  /**
+   * Per-screen looks by screen name, so they survive a regenerate that makes
+   * new screen ids. Mirrors `plan.screens[].look`.
+   */
+  screenLooks?: Record<string, ScreenLook>
+  /**
    * When the person pressed Save.
    *
    * Absent means never saved. Uploading and generating write to storage as
@@ -432,3 +550,15 @@ export type PipelineEvent =
   | { type: 'screen-done'; screenId: string; path: string }
   | { type: 'done'; project: unknown }
   | { type: 'error'; message: string }
+
+/**
+ * The generator a project builds with.
+ *
+ * An explicit choice wins. Otherwise documents that describe an API go to the
+ * classic pipeline, which is built around typed calls to documented endpoints,
+ * and documents with no API go to the AI builder, which designs from the prose.
+ */
+export function generatorFor(project: Pick<Project, 'generator' | 'appSpec'>): 'classic' | 'ai' {
+  if (project.generator) return project.generator
+  return (project.appSpec?.endpoints.length ?? 0) > 0 ? 'classic' : 'ai'
+}

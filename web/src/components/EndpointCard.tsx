@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ChevronRight, Lock, Quote } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, Lock, Pencil, Quote, Trash2 } from 'lucide-react'
 import { Badge, MethodBadge } from '@/components/ui/Badge'
-import { LearnShape } from '@/components/LearnShape'
+import { EndpointEditor } from '@/components/EndpointEditor'
+import { TestEndpoint } from '@/components/TestEndpoint'
+import { TestDot, TestVerdict } from '@/components/TestStatus'
 import { cn } from '@/lib/cn'
-import type { Endpoint, ParamSpec } from '@/lib/types'
+import type { Endpoint, ParamSpec, Project } from '@/lib/types'
 
 function ParamRow({ param }: { param: ParamSpec }) {
   return (
@@ -34,20 +36,36 @@ function ParamGroup({ title, params }: { title: string; params: ParamSpec[] }) {
 /**
  * One extracted endpoint. Collapsed it reads as a scannable row; expanded it
  * shows every field that was pulled from the document, plus the verbatim
- * excerpt it came from — so the extraction can be audited, not just trusted.
+ * excerpt it came from — so the extraction can be audited, not just trusted,
+ * and corrected in place when it is wrong.
  */
 export function EndpointCard({
   endpoint,
   index,
   projectId,
-  onLearned,
+  onTested,
+  onSave,
+  onRemove,
+  onMove,
+  canMoveUp = false,
+  canMoveDown = false,
+  startEditing = false,
 }: {
   endpoint: Endpoint
   index: number
   projectId: string
-  onLearned: () => void
+  onTested: (project: Project) => void
+  onSave: (next: Endpoint) => Promise<void>
+  onRemove: () => Promise<void>
+  /** Moves this endpoint one place in the calling order. */
+  onMove?: (direction: -1 | 1) => void
+  canMoveUp?: boolean
+  canMoveDown?: boolean
+  startEditing?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(startEditing)
+  const [editing, setEditing] = useState(startEditing)
+  const [confirmRemove, setConfirmRemove] = useState(false)
 
   const successType = endpoint.responses.find((r) => /^2\d\d$/.test(r.status))?.typeName
   const paramCount =
@@ -60,16 +78,23 @@ export function EndpointCard({
       transition={{ delay: Math.min(index * 0.035, 0.5), duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
       className="overflow-hidden rounded-2xl bg-surface ring-1 ring-line transition-shadow hover:shadow-[var(--shadow-soft)]"
     >
+      <div className="flex items-center">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
+        className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 pr-2 text-left"
       >
+        <span className="w-4 shrink-0 text-right font-mono text-[11px] font-semibold text-faint tabular-nums">
+          {index + 1}
+        </span>
         <ChevronRight
           className={cn('size-3.5 shrink-0 text-faint transition-transform duration-200', open && 'rotate-90')}
         />
         <MethodBadge method={endpoint.method} />
         <code className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium text-ink">{endpoint.path}</code>
+
+        {endpoint.edited && <Badge tone="sky">edited</Badge>}
+        <TestDot test={endpoint.lastTest} />
 
         {endpoint.auth.type !== 'none' && (
           <span title={`Requires ${endpoint.auth.type} auth`}>
@@ -80,6 +105,29 @@ export function EndpointCard({
           <code className="hidden shrink-0 font-mono text-[11.5px] text-lilac sm:inline">{successType}</code>
         )}
       </button>
+      {onMove && (
+        <div className="flex shrink-0 flex-col pr-2">
+          <button
+            type="button"
+            onClick={() => onMove(-1)}
+            disabled={!canMoveUp}
+            title="Call earlier"
+            className="grid h-4 w-6 place-items-center rounded text-faint hover:bg-primary-soft hover:text-primary disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ChevronUp className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onMove(1)}
+            disabled={!canMoveDown}
+            title="Call later"
+            className="grid h-4 w-6 place-items-center rounded text-faint hover:bg-primary-soft hover:text-primary disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ChevronDown className="size-3.5" />
+          </button>
+        </div>
+      )}
+      </div>
 
       <AnimatePresence initial={false}>
         {open && (
@@ -90,8 +138,56 @@ export function EndpointCard({
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="overflow-hidden"
           >
+            {editing ? (
+              <div className="border-t border-line-soft px-4 py-4">
+                <EndpointEditor
+                  endpoint={endpoint}
+                  onCancel={() => setEditing(false)}
+                  onSave={async (next) => {
+                    await onSave(next)
+                    setEditing(false)
+                  }}
+                />
+              </div>
+            ) : (
             <div className="space-y-4 border-t border-line-soft px-4 py-4">
-              {endpoint.summary && <p className="text-[13px] text-ink-soft">{endpoint.summary}</p>}
+              <div className="flex items-start gap-2">
+                <p className="min-w-0 flex-1 text-[13px] text-ink-soft">{endpoint.summary}</p>
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-soft px-2.5 py-1.5 text-[11.5px] font-semibold text-primary transition-opacity hover:opacity-80"
+                >
+                  <Pencil className="size-3.5" /> Edit
+                </button>
+                {confirmRemove ? (
+                  <span className="flex shrink-0 items-center gap-1 text-[11.5px]">
+                    <button
+                      type="button"
+                      onClick={() => void onRemove()}
+                      className="rounded-lg bg-rose px-2.5 py-1.5 font-semibold text-white"
+                    >
+                      Remove
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmRemove(false)}
+                      className="rounded-lg px-2 py-1.5 font-semibold text-muted hover:text-ink"
+                    >
+                      Keep
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmRemove(true)}
+                    title="Remove this API"
+                    className="grid size-7 shrink-0 place-items-center rounded-lg text-faint hover:bg-rose-soft hover:text-rose"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </div>
 
               <div className="grid gap-1 text-[12px]">
                 <div className="flex gap-2">
@@ -150,6 +246,14 @@ export function EndpointCard({
 
               <div>
                 <p className="mb-1.5 text-[10.5px] font-bold uppercase tracking-wider text-faint">
+                  Live test
+                </p>
+                {endpoint.lastTest ? (
+                  <TestVerdict test={endpoint.lastTest} className="mb-2" />
+                ) : (
+                  <p className="mb-2 text-[12px] text-muted">Not tested yet.</p>
+                )}
+                <p className="mb-1.5 mt-3 text-[10.5px] font-bold uppercase tracking-wider text-faint">
                   Response shape
                 </p>
                 {successType ? (
@@ -161,7 +265,7 @@ export function EndpointCard({
                     Not documented — screens cannot lay this data out until it is known.
                   </p>
                 )}
-                <LearnShape projectId={projectId} endpoint={endpoint} onLearned={onLearned} />
+                <TestEndpoint projectId={projectId} endpoint={endpoint} onTested={onTested} />
               </div>
 
               {endpoint.sourceQuote && (
@@ -173,6 +277,7 @@ export function EndpointCard({
                 </div>
               )}
             </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

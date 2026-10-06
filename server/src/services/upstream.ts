@@ -165,9 +165,39 @@ export async function callUpstream(
       body: null,
       durationMs: Date.now() - started,
       url,
-      error: aborted ? `Upstream request timed out after ${timeoutMs / 1000}s` : (err as Error).message,
+      error: aborted ? `Upstream request timed out after ${timeoutMs / 1000}s` : unreachable(err as Error, url),
     }
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * Says why a request never reached the API, where Node only says "fetch failed".
+ *
+ * The usual cause is an API on a company network or VPN: it works in Postman,
+ * which runs on the person's machine, and not from a server outside that
+ * network. Saying so saves an hour of checking tokens and bodies that were fine.
+ */
+function unreachable(err: Error, url: string): string {
+  const cause = (err as Error & { cause?: { code?: string; message?: string } }).cause
+  const code = cause?.code ?? ''
+  const host = (() => {
+    try {
+      return new URL(url).host
+    } catch {
+      return url
+    }
+  })()
+  const network =
+    `This server could not connect to ${host}. If the API is only reachable on your company network or VPN, ` +
+    'it works in Postman because Postman runs on your PC; this server has to be on that network too.'
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return `${host} could not be found from this server (${code}). ${network}`
+  if (['ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) {
+    return `No connection (${code}). ${network}`
+  }
+  if (/certificate|CERT_|SELF_SIGNED/i.test(`${code} ${cause?.message ?? ''}`)) {
+    return `The API's certificate was not trusted (${code || cause?.message}). Postman may have certificate checks turned off.`
+  }
+  return cause?.message ? `${err.message}: ${cause.message}` : err.message
 }

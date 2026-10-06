@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import {
   SandpackProvider,
   SandpackLayout,
@@ -6,10 +6,13 @@ import {
   SandpackCodeEditor,
   SandpackFileExplorer,
 } from '@codesandbox/sandpack-react'
-import { Code2, ExternalLink, Monitor, RefreshCw } from 'lucide-react'
+import { Circle, Code2, Download, ExternalLink, Monitor, Play, RefreshCw, RotateCcw, Square, X } from 'lucide-react'
 import { toSandpackBundle } from '@/lib/sandpack'
+import { demoResponse, demoValues } from '@/lib/demo'
+import { canRecord, recordThisTab, type Recording, type TabRecorder } from '@/lib/recorder'
+import { RecordMenu } from '@/components/RecordDemo'
 import { cn } from '@/lib/cn'
-import type { GeneratedFile } from '@/lib/types'
+import type { AppSpec, GeneratedFile } from '@/lib/types'
 
 type Tab = 'preview' | 'code'
 
@@ -29,7 +32,7 @@ type Tab = 'preview' | 'code'
  * each call up to this window, which is itself on localhost and can make the
  * request, and posts the result back down.
  */
-function useCallBridge(projectId: string) {
+function useCallBridge(projectId: string, demo: MutableRefObject<{ on: boolean; appSpec?: AppSpec }>) {
   useEffect(() => {
     async function onMessage(event: MessageEvent) {
       const data = event.data as
@@ -49,6 +52,17 @@ function useCallBridge(projectId: string) {
       const reply = (payload: Record<string, unknown>) => {
         const target = event.source as Window | null
         target?.postMessage({ __spec2ui: 'response', id: data.id, ...payload }, '*')
+      }
+
+      /*
+       * During a demo nothing real is called: every call succeeds with the best
+       * sample on hand, after a pause long enough to see the loading state.
+       */
+      if (demo.current.on) {
+        const endpoint = demo.current.appSpec?.endpoints.find((e) => e.operationId === data.operationId)
+        await new Promise((r) => setTimeout(r, 650))
+        reply({ status: 200, body: demoResponse(endpoint, demo.current.appSpec), url: `demo://${data.operationId}` })
+        return
       }
 
       try {
@@ -75,32 +89,193 @@ function useCallBridge(projectId: string) {
 
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [projectId])
+  }, [projectId, demo])
 }
 
 export function PreviewPane({
   files,
   projectId,
   standalone,
+  appSpec,
+  autoDemo,
+  recordDemo,
+  recordSelf,
 }: {
   files: GeneratedFile[]
   projectId: string
   /** Set on the dedicated preview window, which fills the screen and cannot pop itself out again. */
   standalone?: boolean
+  /** The endpoints a demo run answers for and takes its typed values from. */
+  appSpec?: AppSpec
+  /** Set on the demo window: plays the journey as soon as the app loads, then closes. */
+  autoDemo?: boolean
+  /** With autoDemo: records the run to a video instead of closing at the end. */
+  recordDemo?: boolean
+  /** Records the person using the app themselves; no demo is played. */
+  recordSelf?: boolean
 }) {
-  useCallBridge(projectId)
+  // A recorded demo waits for the person to start recording; a plain one starts at once.
+  const demo = useRef<{ on: boolean; pending: boolean; appSpec?: AppSpec }>({
+    on: false,
+    pending: Boolean(autoDemo && !recordDemo),
+  })
+  demo.current.appSpec = appSpec
+  useCallBridge(projectId, demo)
   const [tab, setTab] = useState<Tab>('preview')
   const [nonce, setNonce] = useState(0)
+  const [demoState, setDemoState] = useState<{ running: boolean; text?: string }>({ running: Boolean(autoDemo) })
+  const frame = useRef<HTMLDivElement>(null)
+  const player = useRef<Window | null>(null)
+  // What Esc does right now, kept current each render so the message handler never holds a stale one.
+  const onEscape = useRef<(() => void) | null>(null)
+  const recorder = useRef<TabRecorder | null>(null)
+  // True once the app has mounted; recording waits for it so the video opens on the app, not its loader.
+  const [appReady, setAppReady] = useState(false)
+  const [rec, setRec] = useState<{
+    phase: 'ready' | 'asking' | 'recording' | 'saving' | 'done' | 'error'
+    video?: Recording
+    error?: string
+  }>({ phase: 'ready' })
+
+  /*
+   * A demo starts from a fresh preview, so it begins on the first screen with
+   * nothing typed. The player announces itself once the app has loaded, and
+   * only then is it told to start.
+   */
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      const data = event.data as { __spec2ui?: string; text?: string; error?: string } | null
+      if (!data?.__spec2ui) return
+      if (data.__spec2ui === 'demo-ready') {
+        player.current = event.source as Window | null
+        setAppReady(true)
+      }
+      if (data.__spec2ui === 'demo-ready' && demo.current.pending) {
+        demo.current.pending = false
+        demo.current.on = true
+        const source = event.source as Window | null
+        source?.postMessage({ __spec2ui: 'demo-start', values: demoValues(demo.current.appSpec?.endpoints ?? []) }, '*')
+      } else if (data.__spec2ui === 'demo-escape') {
+        onEscape.current?.()
+      } else if (data.__spec2ui === 'demo-progress') {
+        setDemoState({ running: true, text: data.text })
+      } else if (data.__spec2ui === 'demo-done') {
+        demo.current.on = false
+        setDemoState({ running: false, text: data.error ? `Demo stopped: ${data.error}` : undefined })
+        if (recorder.current) void finishRecording()
+        // The demo window exists for the run alone; the player has already lingered on the end.
+        else if (autoDemo && !recordDemo && !data.error) window.setTimeout(() => window.close(), 600)
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoDemo, recordDemo, recordSelf])
+
+  /** A demo plays in a window of its own, which closes itself when the journey ends. */
+  function startDemo(record: false | 'demo' | 'self' = false) {
+    window.open(
+      record === 'self'
+        ? `/preview/${projectId}?record=self`
+        : `/preview/${projectId}?demo=1${record ? '&record=1' : ''}`,
+      `spec2ui-demo-${projectId}`,
+      'width=1280,height=900',
+    )
+  }
+
+  /**
+   * Asks to share this tab, then plays the demo while it records. The run
+   * starts only once recording has, so the video opens on the first screen.
+   */
+  async function startRecording() {
+    setRec({ phase: 'asking' })
+    try {
+      recorder.current = await recordThisTab()
+    } catch (err) {
+      recorder.current = null
+      const denied = err instanceof DOMException && err.name === 'NotAllowedError'
+      const message = denied ? 'Recording was not allowed. Choose this tab when the browser asks.' : String(err)
+      setRec({ phase: 'error', error: message })
+      return
+    }
+    // Sharing stopped from the browser's own bar ends the run, and still keeps what was recorded.
+    recorder.current.onEnded(() => stopDemo())
+    setRec({ phase: 'recording' })
+    // Recording yourself: the app is yours to drive, with its real API.
+    if (recordSelf) return
+    // Lets the share prompt clear before the first frame worth keeping.
+    await new Promise((r) => setTimeout(r, 800))
+    // The app may still be loading; the player says when it is listening.
+    for (let i = 0; i < 300 && !player.current; i++) await new Promise((r) => setTimeout(r, 200))
+    demo.current.on = true
+    setDemoState({ running: true })
+    player.current?.postMessage({ __spec2ui: 'demo-start', values: demoValues(demo.current.appSpec?.endpoints ?? []) }, '*')
+  }
+
+  async function finishRecording() {
+    const active = recorder.current
+    if (!active) return
+    recorder.current = null
+    setRec({ phase: 'saving' })
+    await new Promise((r) => setTimeout(r, 400))
+    const video = await active.finish()
+    setRec({ phase: 'done', video })
+  }
+
+  function downloadVideo(video: Recording) {
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')
+    const name = (document.title.replace(/\s+—.*$/, '') || 'app').replace(/[^\w-]+/g, '-').toLowerCase()
+    const link = document.createElement('a')
+    link.href = video.url
+    link.download = `${name}-demo-${stamp}.${video.extension}`
+    link.click()
+  }
+
+  // Esc stops a recording or a running demo, whether it is pressed in the app or around it.
+  onEscape.current = rec.phase === 'recording' || (autoDemo && demoState.running) ? () => stopDemo() : null
+
+  useEffect(() => {
+    if (rec.phase !== 'recording') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stopDemo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rec.phase])
+
+  function stopDemo() {
+    const target = frame.current?.querySelector('iframe')?.contentWindow
+    target?.postMessage({ __spec2ui: 'demo-stop' }, '*')
+    demo.current.on = false
+    demo.current.pending = false
+    setDemoState({ running: false })
+    if (recordSelf) {
+      void finishRecording()
+      return
+    }
+    // A recording keeps the window open for its video; the stop reaches finishRecording via demo-done.
+    if (recordDemo) {
+      if (recorder.current) window.setTimeout(() => void finishRecording(), 1500)
+      return
+    }
+    if (autoDemo) window.close()
+  }
 
   // The pop-out window has the whole viewport; the panel in the studio sits
   // beside other cards and needs a fixed height to stay predictable.
   const paneHeight = standalone ? 'calc(100dvh - 112px)' : 620
 
   const bundle = useMemo(() => toSandpackBundle(files), [files])
-  const signature = useMemo(
-    () => `${files.length}:${files.reduce((sum, f) => sum + f.content.length, 0)}:${nonce}`,
-    [files, nonce],
-  )
+  // A hash of the contents, not their length: recolouring swaps one hex code
+  // for another of the same length, and the preview must still remount.
+  const signature = useMemo(() => {
+    let hash = 5381
+    for (const f of files) {
+      for (let i = 0; i < f.content.length; i++) hash = ((hash << 5) + hash + f.content.charCodeAt(i)) | 0
+    }
+    return `${files.length}:${hash >>> 0}:${nonce}`
+  }, [files, nonce])
 
   /*
    * A window of its own shows the app and nothing else.
@@ -120,6 +295,31 @@ export function PreviewPane({
         options={{ recompileMode: 'delayed', recompileDelay: 400 }}
         theme={sandpackTheme}
       >
+        {(recordDemo || recordSelf) && (
+          <RecordOverlay
+            rec={rec}
+            appReady={appReady}
+            self={Boolean(recordSelf)}
+            onStart={() => void startRecording()}
+            onDownload={downloadVideo}
+          />
+        )}
+        {autoDemo && !recordDemo && (
+          <div className="fixed top-3 right-3 z-50 flex items-center gap-2">
+            <span className="rounded-full bg-amber-soft px-3 py-1.5 text-[12px] font-semibold text-amber shadow-sm">
+              {demoState.running ? 'Demo · sample data, no real API calls' : demoState.text ?? 'Demo finished'}
+            </span>
+            <button
+              type="button"
+              onClick={stopDemo}
+              className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-rose shadow-sm ring-1 ring-line hover:bg-rose-soft"
+            >
+              <Square className="size-3.5" />
+              {demoState.running ? 'Stop demo' : 'Close'}
+            </button>
+          </div>
+        )}
+        <div ref={frame}>
         <SandpackLayout style={{ border: 'none', borderRadius: 0, background: 'transparent' }}>
           <SandpackPreview
             showNavigator={false}
@@ -128,6 +328,7 @@ export function PreviewPane({
             style={{ height: '100dvh', width: '100%' }}
           />
         </SandpackLayout>
+        </div>
       </SandpackProvider>
     )
   }
@@ -158,6 +359,19 @@ export function PreviewPane({
         </div>
 
         <div className="flex items-center gap-1">
+          <RecordMenu
+            onDemo={() => startDemo('demo')}
+            onSelf={() => startDemo('self')}
+          />
+          <button
+            type="button"
+            onClick={() => startDemo()}
+            title="Play the journey on its own in a new window, with sample data"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-2.5 py-1.5 text-[12px] font-semibold text-primary transition-colors hover:opacity-80"
+          >
+            <Play className="size-3.5" />
+            Run demo
+          </button>
           {/*
             The API bridge lives in whichever window hosts this component, so the
             popped-out window relays its own calls. Opening the built preview
@@ -193,6 +407,7 @@ export function PreviewPane({
         </div>
       </div>
 
+      <div ref={frame}>
       <SandpackProvider
         key={signature}
         template="react-ts"
@@ -223,6 +438,7 @@ export function PreviewPane({
           )}
         </SandpackLayout>
       </SandpackProvider>
+      </div>
     </div>
   )
 }
@@ -258,4 +474,123 @@ const sandpackTheme = {
     size: '13px',
     lineHeight: '1.6',
   },
+}
+
+/**
+ * Everything the record window shows around the app: the start button, the
+ * finished video and what to do with it. Nothing is drawn while recording, so
+ * nothing but the app ends up in the video.
+ */
+function RecordOverlay({
+  rec,
+  self,
+  appReady,
+  onStart,
+  onDownload,
+}: {
+  rec: { phase: 'ready' | 'asking' | 'recording' | 'saving' | 'done' | 'error'; video?: Recording; error?: string }
+  self: boolean
+  appReady: boolean
+  onStart: () => void
+  onDownload: (video: Recording) => void
+}) {
+  /*
+   * Nothing is drawn over the app while recording, so nothing but the app is in
+   * the video. Stopping is Esc, or the browser's own Stop sharing bar, which
+   * sits outside the page and is never captured.
+   */
+  if (rec.phase === 'recording') return null
+
+  const card = 'w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-xl ring-1 ring-line'
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-6 backdrop-blur-sm">
+      {rec.phase === 'done' && rec.video ? (
+        <div className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl ring-1 ring-line">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-[15px] font-semibold text-ink">Your demo video</p>
+            <span className="text-[12px] text-muted">
+              {rec.video.seconds}s · {(rec.video.blob.size / 1_048_576).toFixed(1)} MB · {rec.video.extension.toUpperCase()}
+            </span>
+          </div>
+          <video src={rec.video.url} controls autoPlay className="w-full rounded-xl bg-black" />
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => window.close()}
+              className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-[13px] font-semibold text-muted hover:bg-canvas-deep hover:text-ink"
+            >
+              <X className="size-4" /> Close
+            </button>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-surface px-4 py-2 text-[13px] font-semibold text-ink ring-1 ring-line hover:bg-canvas"
+            >
+              <RotateCcw className="size-4" /> Record again
+            </button>
+            <button
+              type="button"
+              onClick={() => onDownload(rec.video!)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-[13px] font-semibold text-white hover:bg-primary-hover"
+            >
+              <Download className="size-4" /> Download video
+            </button>
+          </div>
+        </div>
+      ) : rec.phase === 'saving' ? (
+        <div className={card}>
+          <p className="text-[14px] font-semibold text-ink">Preparing your video…</p>
+        </div>
+      ) : (
+        <div className={card}>
+          <span className="mx-auto mb-3 grid size-12 place-items-center rounded-full bg-rose-soft text-rose">
+            <Circle className="size-5 fill-current" />
+          </span>
+          <p className="text-[16px] font-semibold text-ink">{self ? 'Record yourself' : 'Record the demo'}</p>
+          {self ? (
+            <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
+              The browser will ask to share a tab. Choose <b>this tab</b>, then use the app as you normally would. It calls
+              the real APIs. When you are done, press{' '}
+              <kbd className="rounded bg-canvas-deep px-1.5 py-0.5 font-mono text-[11px]">Esc</kbd> or <b>Stop sharing</b> in
+              the browser's bar.
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
+              The browser will ask to share a tab. Choose <b>this tab</b>, and the demo plays while it records. Press{' '}
+              <kbd className="rounded bg-canvas-deep px-1.5 py-0.5 font-mono text-[11px]">Esc</kbd> to stop early. Sample
+              data only, no real API calls.
+            </p>
+          )}
+          {rec.phase === 'error' && <p className="mt-3 text-[12.5px] text-rose">{rec.error}</p>}
+          {!canRecord() && (
+            <p className="mt-3 text-[12.5px] text-rose">This browser cannot record a tab. Use Chrome or Edge.</p>
+          )}
+          <div className="mt-5 flex justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => window.close()}
+              className="rounded-xl px-4 py-2 text-[13px] font-semibold text-muted hover:bg-canvas-deep hover:text-ink"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onStart}
+              disabled={rec.phase === 'asking' || !canRecord() || !appReady}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-rose px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
+            >
+              <Circle className="size-3 fill-current" />
+              {!appReady
+                ? 'Loading the app…'
+                : rec.phase === 'asking'
+                  ? 'Waiting for the browser…'
+                  : rec.phase === 'error'
+                    ? 'Try again'
+                    : 'Start recording'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }

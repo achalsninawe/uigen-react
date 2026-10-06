@@ -1,6 +1,6 @@
 import { bffBase } from './bff.js'
 import { docComment, key, str, toIdentifier, toTsType } from './lang.js'
-import type { AppSpec, Endpoint, ParamSpec } from '../../types.js'
+import type { AppSpec, BrandTheme, Endpoint, ParamSpec, ScreenLook } from '../../types.js'
 
 export interface EmitContext {
   projectId: string
@@ -15,6 +15,14 @@ export interface EmitContext {
    *          stays on the server instead of shipping in the page.
    */
   transport: 'proxy' | 'direct' | 'bridge' | 'bff'
+  /** The project's uploaded brand theme, applied to the plan before emitting. */
+  brand?: BrandTheme
+  /** The colour the person picked; wins over the planner's and the brand's. */
+  accent?: string
+  /** Root font size the person picked, in px. */
+  rootSize?: number
+  /** Per-screen looks by screen name, re-applied to a fresh plan. */
+  screenLooks?: Record<string, ScreenLook>
   /** Absolute origin of the Spec2UI server, used by the proxy transport. */
   serverOrigin: string
   /** Sub-path the build is served from, e.g. `/p/abc123` for a published site. */
