@@ -11,7 +11,8 @@ The endpoints are taken **exactly as written**. Nothing is invented.
 
 ```bash
 cd "D:\UI GEN"
-npm install     # first time only
+npm install
+cp .env.example .env    
 npm run dev
 ```
 
@@ -49,7 +50,7 @@ fresh one.
 
 ```ini
 AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_ENDPOINT=https://dynamic-ui-and-video.openai.azure.com/
+AZURE_OPENAI_ENDPOINT=...
 AZURE_OPENAI_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_API_VERSION=2024-12-01-preview
 
@@ -62,8 +63,8 @@ AZURE_V2_API_VERSION=2024-12-01-preview
 # Which of the two to use: v1, v2, or either deployment name
 AZURE_MODEL=v1
 
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
-AZURE_STORAGE_PREFIX=spec2ui
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=....
+AZURE_STORAGE_PREFIX=...
 
 PORT=5177
 WORK_DIR=./.work
