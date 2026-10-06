@@ -43,6 +43,33 @@ export function mergeEntities(existing: Entity[], inferred: Entity[]): Entity[] 
 }
 
 /**
+ * As mergeEntities, but a live observation replaces the entity outright.
+ *
+ * Merging kept the fields guessed from prose alongside the real ones, so a
+ * list type carried both `"Project Name"` (from a table heading) and
+ * `projectName` (from the API). A screen that picked the guessed one compiled
+ * and rendered an empty column. What the API returned is the whole truth.
+ */
+export function replaceEntities(existing: Entity[], observed: Entity[]): Entity[] {
+  const byName = new Map(existing.map((e) => [e.name, e]))
+  for (const entity of observed) {
+    const current = byName.get(entity.name)
+    byName.set(entity.name, current?.description ? { ...entity, description: current.description } : entity)
+  }
+  return [...byName.values()]
+}
+
+/** True when a 2xx body is not a success worth learning a shape from. */
+export function looksLikeFailure(body: unknown): boolean {
+  if (body === null || typeof body !== 'object') return true
+  if (Array.isArray(body) ? body.length === 0 : Object.keys(body).length === 0) return true
+  // Flow APIs report failure inside a 200 — `result: 0` and a message. That is
+  // an error's shape, not the success the screens need.
+  const record = body as Record<string, unknown>
+  return record.result === 0 || record.success === false || 'error' in record || 'errors' in record
+}
+
+/**
  * Records a real response against the endpoint that produced it.
  *
  * Shared with the Learn route so that pressing the button and probing
@@ -58,7 +85,7 @@ export function applyObservedShape(
   const { rootTypeName, entities } = inferTypes(body, rootName, undefined, { allOptional: true })
   markDateFields(body, entities)
 
-  appSpec.entities = mergeEntities(appSpec.entities, entities)
+  appSpec.entities = replaceEntities(appSpec.entities, entities)
 
   const endpoint = appSpec.endpoints.find((e) => e.operationId === operationId)
   if (endpoint) {
@@ -90,7 +117,7 @@ export interface ProbeReport {
 }
 
 /** Path parameter names in a template, e.g. `/projects/{projectId}/updates`. */
-function pathParamNames(path: string): string[] {
+export function pathParamNames(path: string): string[] {
   return [...path.matchAll(/\{([^}]+)\}|:([A-Za-z0-9_]+)/g)].map((m) => m[1] ?? m[2]!)
 }
 
@@ -102,7 +129,7 @@ function pathParamNames(path: string): string[] {
  * alternative is skipping every endpoint that takes a parameter, which is most
  * of the interesting ones.
  */
-function harvest(body: unknown, into: Map<string, string>, depth = 0): void {
+export function harvest(body: unknown, into: Map<string, string>, depth = 0): void {
   if (depth > 3 || body === null || typeof body !== 'object') return
 
   if (Array.isArray(body)) {
@@ -122,7 +149,7 @@ function harvest(body: unknown, into: Map<string, string>, depth = 0): void {
 }
 
 /** A value for one path parameter, from the spec or from what we have seen. */
-function valueFor(name: string, endpoint: Endpoint, harvested: Map<string, string>): string | undefined {
+export function valueFor(name: string, endpoint: Endpoint, harvested: Map<string, string>): string | undefined {
   const documented = endpoint.pathParams.find((p) => p.name === name)
   if (documented?.example) return documented.example
   if (documented?.enum?.length) return documented.enum[0]

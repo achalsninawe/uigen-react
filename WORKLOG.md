@@ -226,6 +226,88 @@ verification never writes into the real Azure account.
 
 ---
 
+## 5 October 2026
+
+Deployed the studio to Azure, then made the extracted API checkable and
+correctable before any screen is written, and made styling changes reach every
+screen.
+
+### Deployment
+
+| # | Task | Outcome |
+|---|---|---|
+| 1 | Container App | `spec2ui` in resource group `dynamic-ui-video` (East US 2), image `docker.io/achalninawe/spec2ui:v2`, ingress on port 8080 |
+| 2 | Environment | Every `.env` variable set on the app except `PORT` and `WORK_DIR`, which the Dockerfile sets |
+| 3 | URL | https://spec2ui.bravestone-75dc6473.eastus2.azurecontainerapps.io |
+
+### API editor
+
+| # | Task | Outcome |
+|---|---|---|
+| 4 | Edit an endpoint | Method, path, base URL, description, auth, headers, query parameters and an example body. Saved through `PUT /appspec`, marked `edited` |
+| 5 | Add and remove | An endpoint the analysis missed can be added; one it invented can be removed |
+| 6 | Kept stable | The operation name is never renamed on edit, so screens that call it keep working. Path parameters are derived from the path |
+| 7 | Calling order | Up/down arrows on each endpoint. Once moved, `callOrder: 'manual'` and Test all follows the order shown |
+
+### Testing APIs
+
+| # | Task | Outcome |
+|---|---|---|
+| 8 | Test all APIs | `POST /endpoints/test-all` calls each endpoint once; every card shows pass, fail or not called, with a sentence saying what to fix |
+| 9 | Test one API | `POST /endpoints/:operationId/test` with values the person types. Replaced the Learn response shape panel |
+| 10 | Shapes from real responses | Every 2xx with data teaches the endpoint its response shape, so the next generate lays screens out against it |
+| 11 | Failure inside a 200 | `result: 0`, `Errors: [...]`, `Status: "fail"` count as failures, quoting the API's own message |
+| 12 | Writes are opt-in | POSTs named like reads (query, search, quotation, calculate) are tested by default; the rest only with "Include write calls" |
+| 13 | Missing credential | A secured API with no token saved is reported, not called for a 401 |
+| 14 | Real values reused | What the person typed is kept as `lastTestInput` and reused by Test all. Fixed the 500s caused by the documents' invented example values (`P001234567`) |
+
+### Changing screens
+
+| # | Task | Outcome |
+|---|---|---|
+| 15 | Edit one screen | "Edit this screen" on each screen, and a screen picker in Fix or refine. Only the chosen screen is sent to the model |
+| 16 | App color | Nine swatches and a custom picker. Re-emits the stylesheet; every colour is mixed from one accent, so every screen changes, no regenerate |
+| 17 | Text size | Small, Default, Large. The kit's 38 fixed pixel sizes became rem, so one root size scales all text |
+| 18 | Typed style requests | "make it blue", "reduce font size" in Fix or refine are applied as App color and Text size. Notes only about style skip the model |
+
+### Per-screen style, demo and recording
+
+| # | Task | Outcome |
+|---|---|---|
+| 19 | Per-screen color and text size | With a screen picked, "make it blue" or "smaller font" changes that screen only, through an inline style around its route in `App.tsx`. Kept by screen name through regenerating |
+| 20 | Run demo | Opens a window that plays the journey by itself: a visible cursor fills fields, clicks the next action, highlights new tables and details, and scrolls through them. Every API call is answered with sample data, so nothing real is called. Closes when done |
+| 21 | Record demo | Same window, recorded through the browser's tab sharing (one Share click). Ends with a preview, Download video (MP4 in Chrome and Edge) and Record again |
+| 22 | Record myself | The person uses the app with its real APIs while the tab records. Esc or the browser's Stop sharing ends it |
+| 23 | Deployed `spec2ui:v3` | All of the above, on the Container App |
+
+### Defects found and fixed
+
+| Defect | Cause | Fix |
+|---|---|---|
+| Green band along the bottom of videos | H.264 encodes in 16-pixel blocks and Chrome pads the remainder with green | Frames redrawn on a canvas trimmed to a multiple of 16 |
+| Video opened on the preview's loading screen | Recording could start before the app mounted | Start recording waits until the app is on screen |
+| Stop button recorded, twice | It was drawn on the page being captured | Removed; Esc and the browser's Stop sharing bar instead |
+| Esc did nothing after clicking into the app | Keys went to the app's frame, not the window | The frame passes Esc up |
+| Test all showed nothing | All three Free Look APIs are POST, so all were skipped, shown as a faint grey dot | Read-like POSTs tested by default, amber "Not called", a summary line after every run |
+| 500 in Test all, fine in Learn | Test all sent the documents' example body | Reuse what was typed in a single test |
+| "Make it blue" changed nothing | The model added pale classes the kit's own styles override | App color setting |
+| "Reduce font" changed nothing | The kit sized text in fixed pixels | rem sizes and a Text size setting |
+| Preview did not refresh after a change | It remounted on total file length, which a colour swap does not change | Remount on a hash of the contents |
+
+### Verified
+
+- Both workspaces type-check; the web app builds; `verify:shell` and `verify:emit-parses` pass.
+- Test all against a mock API: detail used the id from the list, 401 and 200-with-errors failed with reasons, no POST without the box ticked.
+- Style re-emit on the Free Look project, in memory: accent and root size set, no pixel sizes left in the kit, screens untouched.
+- Not yet run end to end: one-screen refine with a live model call; the new controls in a browser.
+
+### Open
+
+- Confirm the Container App is pinned to one replica (it was created with 0 to 10).
+- Nothing committed yet.
+
+---
+
 ## Known gaps
 
 | Gap | Note |
@@ -234,8 +316,6 @@ verification never writes into the real Azure account.
 | Fixture suite | No automated test across document shapes, so a change that helps one document set can silently break another |
 | Smoke test in the pipeline | The browser walk-through is run by hand, not automatically |
 | Publish | The ZIP export is built and verified. Azure publish is not: static website hosting cannot run a BFF build, so publishing one needs a host decision first |
-| Editable endpoint inspector | Extraction cannot yet be corrected in the UI |
-
 ---
 
 ## Notes

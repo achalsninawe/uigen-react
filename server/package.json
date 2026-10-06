@@ -18,7 +18,8 @@
     "diagnose:api": "tsx scripts/diagnose-api.ts",
     "verify:shell": "tsx scripts/verify-shell.ts",
     "verify:probe": "tsx scripts/verify-probe.ts",
-    "verify:prompt": "tsx scripts/verify-prompt.ts"
+    "verify:prompt": "tsx scripts/verify-prompt.ts",
+    "verify:ai-generate": "tsx scripts/verify-ai-generate.ts"
   },
   "dependencies": {
     "@apidevtools/swagger-parser": "^10.1.1",

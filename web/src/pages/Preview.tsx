@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { PreviewPane } from '@/components/PreviewPane'
 import { api } from '@/lib/api'
 import type { Project } from '@/lib/types'
@@ -14,6 +14,13 @@ import type { Project } from '@/lib/types'
  */
 export default function Preview() {
   const { id = '' } = useParams<{ id: string }>()
+  // Opened by Run demo: play the journey with sample data, then close.
+  const [params] = useSearchParams()
+  const demo = params.get('demo') === '1'
+  // Opened by Record demo: the same run, recorded to a video the window offers at the end.
+  const record = demo && params.get('record') === '1'
+  // Opened by Record myself: the person drives the app while the tab records.
+  const recordSelf = params.get('record') === 'self'
   const [project, setProject] = useState<Project | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -26,8 +33,8 @@ export default function Preview() {
   }, [id])
 
   useEffect(() => {
-    if (project) document.title = `${project.name} — preview`
-  }, [project])
+    if (project) document.title = `${project.name} — ${demo ? 'demo' : 'preview'}`
+  }, [project, demo])
 
   if (error) {
     return (
@@ -58,5 +65,5 @@ export default function Preview() {
 
   // Nothing around it: the window is the app. The project name is on the tab,
   // which is where a window's own label belongs.
-  return <PreviewPane files={project.files} projectId={id} standalone />
+  return <PreviewPane files={project.files} projectId={id} standalone appSpec={project.appSpec} autoDemo={demo} recordDemo={record} recordSelf={recordSelf} />
 }
