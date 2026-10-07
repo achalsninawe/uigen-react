@@ -96,6 +96,12 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** Merged over the headers this endpoint already defines. */
   headers?: Record<string, string>
+  /**
+   * Send the body exactly as given. Set by the flow module, whose bodies are
+   * already in the documented example's formats — re-typing them from the
+   * schema would undo that, e.g. turn the example's "3" into 3.
+   */
+  exactBody?: boolean
 }
 
 export interface AuthSpec {
@@ -125,6 +131,35 @@ export interface CallSpec {
   auth?: AuthSpec
 }
 
+/**
+ * The reason an API gave for refusing a request, in its own words.
+ *
+ * APIs put it in different places — message, error, errors[], a nested
+ * result — so the common ones are searched rather than one assumed. Showing
+ * "500 Upstream error" in place of "Product code GEMEND01 not found" leaves
+ * the person with no idea what to correct.
+ */
+export function reasonFrom(body: unknown, depth = 0): string | undefined {
+  if (body === null || body === undefined || depth > 4) return undefined
+  if (typeof body === 'string') return body.trim().slice(0, 600) || undefined
+  if (Array.isArray(body)) {
+    const parts = body.map((item) => reasonFrom(item, depth + 1)).filter(Boolean)
+    return parts.length ? [...new Set(parts)].slice(0, 5).join('; ') : undefined
+  }
+  if (typeof body !== 'object') return String(body)
+  const record = body as Record<string, unknown>
+  for (const name of ['message', 'errorMessage', 'error_description', 'msg', 'detail', 'title', 'reason', 'error', 'errors', 'messages', 'Messages', 'Message', 'errorList', 'result', 'data']) {
+    const found = reasonFrom(record[name], depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
+
+function errorText(status: number, statusText: string, body: unknown, url: string): string {
+  const reason = reasonFrom(body)
+  return reason ? \`\${reason} (\${status})\` : \`\${status} \${statusText} — \${url}\`
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -132,7 +167,7 @@ export class ApiError extends Error {
     readonly body: unknown,
     readonly url: string,
   ) {
-    super(\`\${status} \${statusText} — \${url}\`)
+    super(errorText(status, statusText, body, url))
     this.name = 'ApiError'
   }
 }
@@ -386,7 +421,9 @@ function bridgeCall<T>(spec: CallSpec, headers: Record<string, string>, options:
  * whichever transport is in use.
  */
 export async function call<T>(spec: CallSpec, options: RequestOptions = {}): Promise<T> {
-  const body = coerceDates(coerceNumbers(spec.body, spec.numericFields ?? []), spec.dateFields ?? [])
+  const body = options.exactBody
+    ? spec.body
+    : coerceDates(coerceNumbers(spec.body, spec.numericFields ?? []), spec.dateFields ?? [])
   spec = { ...spec, body }
 
   const baseUrl = runtimeConfig.baseUrlOverride || spec.baseUrl

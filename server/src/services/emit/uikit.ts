@@ -621,6 +621,28 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
   )
 }
 
+/**
+ * Why a submit failed, in the API's own words, next to the button that sent it.
+ * Renders nothing until there is an error.
+ */
+export function FormError({ error, title }: { error: unknown; title?: ReactNode }) {
+  if (!error) return null
+  const message =
+    error instanceof Error ? error.message : typeof error === 'string' ? error : 'The request failed'
+  return (
+    <div role="alert" className="mt-4 flex gap-3 rounded-xl bg-rose-50 px-4 py-3 text-sm ring-1 ring-rose-200">
+      <svg viewBox="0 0 24 24" className="mt-0.5 size-4 shrink-0 text-rose-500" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 8v5M12 16.5v.5" strokeLinecap="round" />
+        <circle cx="12" cy="12" r="9" />
+      </svg>
+      <div className="min-w-0">
+        <p className="font-semibold text-rose-800">{title ?? 'The request was not accepted'}</p>
+        <p className="mt-0.5 break-words text-rose-700">{message}</p>
+      </div>
+    </div>
+  )
+}
+
 /* ---------------------------------- Toasts --------------------------------- */
 
 interface Toast {
@@ -1028,6 +1050,8 @@ STATUS & FEEDBACK
   <Spinner />  <Skeleton className />  <TableSkeleton rows? columns? />
   <EmptyState title description? action? icon? />
   <ErrorState error onRetry? />
+  <FormError error title? />          under a form's <Actions>: why the submit failed, in the
+                                        API's own words. Renders nothing while error is unset.
   useToast() -> { push(message, 'success'|'error'|'info') }
 
 OVERLAYS
@@ -1103,6 +1127,7 @@ export const COMPONENT_PROPS: Record<string, string[]> = {
   TableSkeleton: ['rows', 'columns'],
   EmptyState: ['title', 'description', 'action', 'icon'],
   ErrorState: ['error', 'onRetry'],
+  FormError: ['error', 'title'],
   DataTable: ['rows', 'columns', 'loading', 'error', 'onRetry', 'onRowClick', 'empty', 'getRowKey'],
   Stat: ['label', 'value', 'hint', 'icon'],
   DetailList: ['items'],

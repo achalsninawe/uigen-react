@@ -504,3 +504,47 @@ export const linkSchema = z.object({
 })
 
 export type LinkResult = z.infer<typeof linkSchema>
+
+/**
+ * Where each value in a request body comes from, as the binding pass reads the
+ * documents. Every entry is checked against the example afterwards, so this
+ * only has to be well-formed, not right.
+ */
+const scalarText = z.union([z.string(), z.number(), z.boolean()]).transform(String)
+
+export const bindSchema = z.object({
+  bindings: z
+    .array(
+      z.object({
+        operationId: z.string(),
+        path: z.string(),
+        field: z.string().nullish(),
+        template: z.string().nullish(),
+        responseOperationId: z.string().nullish(),
+        generated: z.enum(['empty', 'now']).nullish().catch(undefined),
+        responsePath: z.string().nullish(),
+      }),
+    )
+    .default([]),
+  options: z
+    .array(
+      z.object({
+        field: z.string(),
+        options: z.array(z.object({ value: scalarText, label: scalarText })).default([]),
+      }),
+    )
+    .default([]),
+  unclear: z.array(z.object({ field: z.string(), reason: z.string().default('') })).default([]),
+})
+
+export const resetSchema = z.object({
+  reset: z
+    .array(
+      z.object({
+        path: z.string(),
+        as: z.enum(['empty', 'now']).catch('empty'),
+        why: z.string().default(''),
+      }),
+    )
+    .default([]),
+})

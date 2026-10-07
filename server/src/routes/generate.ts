@@ -68,6 +68,7 @@ generateRouter.get(
         replan ? undefined : project.plan,
         project.connection,
         sampleData,
+        project.documents,
       )
 
       project.plan = result.plan

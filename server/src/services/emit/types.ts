@@ -8,6 +8,12 @@ export interface PlannedScreen {
   covers?: string[]
 }
 
+/** The planned screens, and the flow's fields once they have been worked out. */
+export interface PlannedApp {
+  screens: PlannedScreen[]
+  flow?: { fields: { key: string; label: string }[] }
+}
+
 /**
  * What a screen is handed when the supplier's API has no documented response.
  *
@@ -74,9 +80,17 @@ export function coveredSpec(
   }
 }
 
-/** Fields the user fills in — read-only ones are displayed, never captured. */
+/**
+ * Fields the user fills in — read-only ones are displayed, never captured.
+ *
+ * A document often says so in the type column ("Policy Number | Read Only")
+ * rather than in a flag, and a success page's policy number treated as an
+ * input was rendered from an empty form state instead of the response.
+ */
+const DISPLAY_ONLY = /read[\s-]*only|display|label|output|view only|system generated|auto[\s-]*generated/i
+
 export function capturedFields(screen: DocumentedScreen) {
-  return screen.fields.filter((field) => !field.readOnly)
+  return screen.fields.filter((field) => !field.readOnly && !DISPLAY_ONLY.test(field.type ?? ''))
 }
 
 /** How much of a form row a field takes. Mirrors FieldSpan in the UI kit. */
@@ -202,7 +216,7 @@ function resolveType(raw: string, known: Set<string>): string {
   return 'unknown'
 }
 
-export function emitTypes(appSpec: AppSpec, plan?: { screens: PlannedScreen[] }): string {
+export function emitTypes(appSpec: AppSpec, plan?: PlannedApp): string {
   const known = new Set(appSpec.entities.map((e) => e.name))
 
   const header = `/**
@@ -215,7 +229,7 @@ export function emitTypes(appSpec: AppSpec, plan?: { screens: PlannedScreen[] })
  */
 `
 
-  const forms = emitFormTypes(appSpec, plan)
+  const forms = [emitFormTypes(appSpec, plan), emitFlowForm(plan)].filter(Boolean).join('\n\n')
 
   if (appSpec.entities.length === 0 && !forms) {
     return `${header}
@@ -241,7 +255,17 @@ export {}
  * Every member is optional and a string, because that is what an input element
  * yields and what a half-filled form holds.
  */
-function emitFormTypes(appSpec: AppSpec, plan?: { screens: PlannedScreen[] }): string {
+/**
+ * Everything the flow collects, across every screen, as one shape — what the
+ * shared draft in src/lib/flow.ts holds.
+ */
+function emitFlowForm(plan?: PlannedApp): string {
+  if (!plan?.flow) return ''
+  const members = plan.flow.fields.map((f) => `  ${key(f.key)}?: string   // ${f.label}`).join('\n')
+  return `/** Everything the user enters across the flow, shared by every screen. */\nexport interface FlowForm {\n${members}\n}`
+}
+
+function emitFormTypes(appSpec: AppSpec, plan?: PlannedApp): string {
   const blocks: string[] = []
 
   /*

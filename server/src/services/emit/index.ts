@@ -16,6 +16,7 @@ import {
 } from './shell.js'
 import { DEMO_NOTICE, emitDemoData } from './demo.js'
 import { emitLocalStore, storableEntities } from './localStore.js'
+import { emitFlow } from './flow.js'
 import type { AppPlan, AppSpec, GeneratedFile } from '../../types.js'
 
 export type { EmitContext } from './apiClient.js'
@@ -67,6 +68,9 @@ export function emitFoundation(appSpec: AppSpec, plan: AppPlan, ctx: EmitContext
     file('src/lib/http.ts', emitHttp()),
     file('src/lib/api.ts', emitApiClient(appSpec)),
     file('src/lib/types.ts', emitTypes(appSpec, plan)),
+
+    // What the user enters, shared across screens, and the bodies built from it
+    ...(plan.flow ? [file('src/lib/flow.ts', emitFlow(appSpec, plan, ctx.projectId))] : []),
 
     /*
      * The app's own server, for builds that leave the studio. Emitted from the

@@ -133,6 +133,8 @@ export function checkImports(code: string, screenFileNames: Set<string>): Violat
     '../lib/store',
     // Emitted when a screen receives a response the documents never described.
     '../lib/read',
+    // Emitted for a flow: the shared draft, dropdown codes and request bodies.
+    '../lib/flow',
   ])
 
   const violations: Violation[] = []
@@ -454,6 +456,24 @@ export function checkFabricatedData(code: string, carriesDataFromAnotherScreen =
  * Brace depth is tracked rather than indentation: the guard's `return` sits
  * inside an `if` block, so matching on leading spaces missed it entirely.
  */
+/** True when the `{` at `brace` opens the body of an if, else or else-if. */
+function opensConditional(code: string, brace: number): boolean {
+  let i = brace - 1
+  while (i >= 0 && /\s/.test(code[i]!)) i--
+  if (code.slice(Math.max(0, i - 3), i + 1) === 'else') return true
+  if (code[i] !== ')') return false
+
+  // Walk back to the matching "(" and read the word before it.
+  let depth = 0
+  for (; i >= 0; i--) {
+    if (code[i] === ')') depth++
+    else if (code[i] === '(' && --depth === 0) break
+  }
+  let j = i - 1
+  while (j >= 0 && /\s/.test(code[j]!)) j--
+  return code.slice(Math.max(0, j - 1), j + 1) === 'if' && !/[\w$]/.test(code[j - 2] ?? '')
+}
+
 export function checkHookOrder(code: string): Violation[] {
   const component = code.search(
     /(?:export\s+default\s+)?function\s+[A-Z]\w*\s*\(|const\s+[A-Z]\w*[^=\n]*=\s*\(/,
@@ -467,6 +487,10 @@ export function checkHookOrder(code: string): Violation[] {
   let depth = 0
   let guardLine = -1
   let line = code.slice(0, open).split('\n').length
+  // Whether each open block belongs to an if/else, by depth. A `return` inside
+  // a callback — useCallback(() => { ... return msg }) — leaves the callback,
+  // not the component, and flagging it sent correct screens back for repair.
+  const guardBlock: boolean[] = []
 
   for (let i = open; i < code.length; i++) {
     const ch = code[i]!
@@ -477,6 +501,7 @@ export function checkHookOrder(code: string): Violation[] {
     }
     if (ch === '{') {
       depth++
+      guardBlock[depth] = opensConditional(code, i)
       continue
     }
     if (ch === '}') {
@@ -491,7 +516,7 @@ export function checkHookOrder(code: string): Violation[] {
 
     const rest = code.slice(i, i + 24)
 
-    if (guardLine === -1 && /^return[\s(;]/.test(rest)) {
+    if (guardLine === -1 && /^return[\s(;]/.test(rest) && (depth === 1 || guardBlock[depth])) {
       guardLine = line
       continue
     }
@@ -591,4 +616,60 @@ export function checkUsesReadHelpers(code: string, required: boolean): Violation
         'hand-written lookup helper.',
     },
   ]
+}
+
+/**
+ * Holds a screen to the flow module: values in the shared draft, bodies built
+ * by code, codes from the documents.
+ *
+ * Each of these is something a screen did on its own and got wrong — passing
+ * only its own step's values on, pasting the example's test person into the
+ * body, inventing "TERM10" as a product — and each compiles perfectly, so only
+ * a check that reads the screen can catch it.
+ */
+export function checkFlowUse(
+  code: string,
+  options: { boundOperations: string[]; capturesFields: boolean; senderFor: (op: string) => string },
+): Violation[] {
+  const violations: Violation[] = []
+
+  for (const op of options.boundOperations) {
+    if (!callsFunction(code, op)) continue
+    violations.push({
+      kind: 'grounding',
+      message:
+        `calls ${op}() and builds its request body itself. Call ${options.senderFor(op)}() from ` +
+        "'../lib/flow' instead — it sends the documented example with the user's values in it.",
+    })
+  }
+
+  if (/state\??\.form\b|\bform\s*:\s*(values|carried)\b/.test(code)) {
+    violations.push({
+      kind: 'grounding',
+      message:
+        "passes form values through router state. Every screen shares one draft: read and write it with useDraft() from '../lib/flow', and pass only API results as { state: { data } }.",
+    })
+  }
+
+  for (const match of code.matchAll(/\{\s*value\s*:\s*['"][^'"]*['"]\s*,\s*label\s*:/g)) {
+    violations.push({
+      kind: 'grounding',
+      message:
+        "declares its own dropdown options. Codes the API accepts are in fieldOptions from '../lib/flow' — " +
+        'render those, or an <Input> when a field has none. Invented codes are rejected by the API.',
+      line: lineOf(code, match.index),
+    })
+    break
+  }
+
+  if (options.capturesFields && !/\buseDraft\s*\(/.test(code)) {
+    violations.push({
+      kind: 'grounding',
+      message:
+        "keeps its form values in its own state. Use const { form, setField } = useDraft() from '../lib/flow', " +
+        'so later screens and the request body see what was entered here.',
+    })
+  }
+
+  return violations
 }

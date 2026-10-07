@@ -336,7 +336,69 @@ export interface ScreenPlan {
   covers?: string[]
 }
 
+/**
+ * Where one value in a request body comes from.
+ *
+ * Exactly one of `field`, `template` or `response` is set. `path` addresses a
+ * leaf of the documented example, arrays by index: `policy.coverages.0.productCode`.
+ */
+export interface BodyBinding {
+  path: string
+  /** A key of the flow's form — what the user typed or picked. */
+  field?: string
+  /** Several form values joined, e.g. `{firstName} {middleName} {lastName}`. */
+  template?: string
+  /** A value an earlier call returned, read from the flow's saved responses. */
+  response?: { operationId: string; path: string }
+  /**
+   * The example's value belonged to its one test record — a policy number, a
+   * submission time, an address line nobody is asked for — and is replaced by
+   * nothing, or by the moment of sending.
+   */
+  generated?: 'empty' | 'now'
+  /**
+   * How the value is written, read off the example's own leaf — never chosen
+   * by the model, which is how a sample `"2024-05-17T14:40:56"` came back as
+   * `"2024-11-11"`. A `datetime` copies the example's exact shape: separator,
+   * seconds, and any fraction or zone after them.
+   */
+  format: 'string' | 'number' | 'boolean' | 'date' | 'datetime'
+}
+
+/** A request body: the documented example, with the user's values laid over it. */
+export interface RequestBinding {
+  operationId: string
+  bindings: BodyBinding[]
+}
+
+/** A dropdown choice: what the user sees, and the code the API is sent. */
+export interface FieldOption {
+  value: string
+  label: string
+}
+
+/**
+ * Everything a multi-screen flow shares, decided once at generation time.
+ *
+ * Screens used to pass what the user typed from one to the next through router
+ * state, and each passed only its own values, so the screen that submitted
+ * held a fraction of the form. They used to write the request body themselves
+ * too, and filled it with the example's test person. Both now live in one
+ * emitted module, `src/lib/flow.ts`, that screens use and cannot get wrong.
+ */
+export interface FlowSpec {
+  /** Every value the flow collects, in the order the documents list them. */
+  fields: { key: string; label: string }[]
+  requests: RequestBinding[]
+  /** Dropdown codes, only ever ones the documents themselves contain. */
+  options: Record<string, FieldOption[]>
+  /** The example's value for a field that has no code list — shown as a hint. */
+  hints: Record<string, string>
+}
+
 export interface AppPlan {
+  /** Absent on a plan made before the flow module existed. */
+  flow?: FlowSpec
   screens: ScreenPlan[]
   navigation: { screenId: string; label: string; icon: string }[]
   theme: {

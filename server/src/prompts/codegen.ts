@@ -2,7 +2,8 @@ import { uiKitReference } from '../services/emit/uikit.js'
 import { demoFieldKey } from '../services/emit/demo.js'
 import { UNDOCUMENTED_RESPONSE, capturedFields, coveredSpec, fieldWidths, formTypeName } from '../services/emit/types.js'
 import { collectionName, storableEntities } from '../services/emit/localStore.js'
-import type { AppPlan, AppSpec, Endpoint, ScreenPlan } from '../types.js'
+import { builderName, senderName } from '../services/emit/flow.js'
+import type { AppPlan, AppSpec, DocumentedField, Endpoint, FlowSpec, ScreenPlan } from '../types.js'
 
 export const CODEGEN_SYSTEM = `You write one React screen component in TypeScript. You are given a generated API client and a fixed component kit, and you compose from them.
 
@@ -63,7 +64,12 @@ CARRYING DATA BETWEEN SCREENS
 A screen with no endpoints of its own is displaying something the previous
 screen fetched. Pass it through the router, never re-invent it.
 
-Router state carries two things, and the keys are always "data" and "form":
+When the screen's brief has a FLOW section, what the user typed is NOT in
+router state at all: every screen shares one draft from '../lib/flow', and
+router state carries only the API result, as { data }. Follow the FLOW section
+and ignore everything below about "form".
+
+Otherwise router state carries two things, and the keys are always "data" and "form":
 
     { data: <what the API returned>, form: <what the user typed> }
 
@@ -201,9 +207,11 @@ renders a dash, which is the whole point of it:
 
 FORMS
 
-Controlled inputs in useState, each wrapped in <Field>, and every group of
-<Field>s inside a <FormGrid>. Mark required fields required. Only include fields
-the request body type declares.
+Controlled inputs — in the shared draft when the brief has a FLOW section,
+otherwise in useState — each wrapped in <Field>, and every group of <Field>s
+inside a <FormGrid>. Mark required fields required. Only include fields the
+specification lists — or, where it lists none, those the request body type
+declares.
 
     <FormGrid>
       <Field label="Coverage type" span="half" required>…</Field>
@@ -321,6 +329,169 @@ function signatureFor(endpoint: Endpoint): string {
   return `${doc}  ${endpoint.operationId}(${args.join(', ')}): Promise<${returns}>`
 }
 
+/** A sender as the flow module emits it: the client function minus its body. */
+function senderSignatureFor(endpoint: Endpoint): string {
+  const args: string[] = []
+  const names = [...endpoint.path.matchAll(/\{([^}]+)\}|:([A-Za-z0-9_]+)/g)].map((m) => m[1] ?? m[2]!)
+  for (const name of names) args.push(`${name}: ${endpoint.pathParams.find((p) => p.name === name)?.type ?? 'string'}`)
+  if (endpoint.queryParams.length > 0) {
+    const required = endpoint.queryParams.some((p) => p.required)
+    args.push(`query${required ? '' : '?'}: { ${endpoint.queryParams.map((p) => `${p.name}${p.required ? '' : '?'}: ${p.type}`).join('; ')} }`)
+  }
+  args.push('options?: RequestOptions')
+
+  const success = endpoint.responses.find((r) => /^2\d\d$/.test(r.status))
+  const returns = success?.status === '204' ? 'void' : (success?.typeName ?? 'unknown')
+  const doc = endpoint.summary ? `  // ${endpoint.summary}\n` : ''
+  return `${doc}  ${senderName(endpoint.operationId)}(${args.join(', ')}): Promise<${returns}>\n  ${builderName(endpoint.operationId)}(): the body it will send — for a screen that shows it before sending`
+}
+
+/**
+ * What a screen is told about the flow's shared draft.
+ *
+ * Exact keys, which of them have real codes, and — on the screen that sends —
+ * every value the request needs from every step, so it can say which step to
+ * go back to instead of sending a half-empty body.
+ */
+function flowSection(
+  flow: FlowSpec,
+  ownFields: DocumentedField[],
+  bound: Endpoint[],
+  appSpec: AppSpec,
+  plan: AppPlan,
+  screen: ScreenPlan,
+): string {
+  const labelOf = new Map(flow.fields.map((f) => [f.key, f.label]))
+  const describe = (fieldKey: string) => {
+    const options = flow.options[fieldKey]
+    if (options?.length) return `dropdown — fieldOptions.${fieldKey} (${options.length} code${options.length === 1 ? '' : 's'})`
+    const hint = flow.hints[fieldKey]
+    return hint !== undefined ? `input — placeholder={fieldHints.${fieldKey}}` : 'input'
+  }
+
+  const own = ownFields
+    .map((f) => {
+      const fieldKey = demoFieldKey(f.label)
+      return `      ${fieldKey}   // ${f.label}${f.required ? ', required' : ''} — ${describe(fieldKey)}`
+    })
+    .join('\n')
+
+  const all = flow.fields.map((f) => `      form.${f.key}   // ${f.label}`).join('\n')
+
+  // Which screen collects each required value, for the sender's own check.
+  const requiredBy: { key: string; label: string; screen: string; route: string }[] = []
+  for (const screen of plan.screens) {
+    const spec = coveredSpec(screen, appSpec.documentedScreens)
+    for (const field of spec ? capturedFields(spec) : []) {
+      const fieldKey = demoFieldKey(field.label)
+      if (field.required && !requiredBy.some((r) => r.key === fieldKey)) {
+        requiredBy.push({ key: fieldKey, label: field.label, screen: screen.name, route: screen.route })
+      }
+    }
+  }
+
+  /*
+   * Where a successful send goes, decided here rather than left as "<next
+   * route>": told nothing, a last step sent the user back to step three.
+   */
+  const receiver = plan.screens.find((s) => s.incomingFrom === screen.name && s.incomingType)
+  const index = plan.screens.findIndex((s) => s.id === screen.id)
+  const later = plan.screens.slice(index + 1).find((s) => s.endpointIds.length === 0 || s.incomingType)
+  const afterSend = receiver
+    ? `navigate(${navTarget(receiver.route)}, { state: { data: result } })`
+    : later
+      ? `navigate(${navTarget(later.route)}, { state: { data: result } })`
+      : null
+
+  const sending = bound.length
+    ? `
+  SENDING. Call the sender — it builds the whole body from the draft:
+
+      const [error, setError] = useState<unknown>()
+      const [busy, setBusy] = useState(false)
+      ...
+      setBusy(true)
+      setError(undefined)
+      try {
+        const result = await ${senderName(bound[0]!.operationId)}()
+        ${afterSend ?? 'setResult(result)'}
+      } catch (err) {
+        setError(err)
+        toast.push(err instanceof Error ? err.message : 'The request failed', 'error')
+      } finally {
+        setBusy(false)
+      }
+
+${
+  afterSend
+    ? ''
+    : `  No screen follows this one, so the result is shown HERE: keep it in state
+  (const [result, setResult] = useState<...>()), and once it is set, replace the
+  form with a confirmation card that renders the response's key fields — a
+  policy or reference number first. Never navigate back to an earlier step.
+
+`
+}  Render <FormError error={error} /> directly under the <Actions> holding the
+  button. It shows the API's own reason for refusing — never replace it with a
+  sentence of your own like "Please check your details".
+${
+  requiredBy.length
+    ? `
+  Before sending, check every value the flow requires, from EVERY step — not only
+  this screen's. If any are empty, do not send: set an error naming them and the
+  step they are on, so the user knows where to go back to:
+
+${requiredBy.map((r) => `      form.${r.key}   // ${r.label} — on ${r.screen} (${r.route})`).join('\n')}
+`
+    : ''
+}`
+    : ''
+
+  return `
+FLOW — import { useDraft, fieldOptions, fieldHints${bound.length ? ', ...' : ''} } from '../lib/flow'
+
+  Every screen shares ONE draft of what the user has entered. A value typed on
+  an earlier step is already in it; nothing is passed through router state.
+
+      const { form, setField } = useDraft()
+${
+  own
+    ? `
+  This screen collects these keys, exactly:
+${own}
+
+  Inputs write straight to the draft:
+
+      <Input value={form.firstName ?? ''} onChange={(e) => setField('firstName', e.target.value)} />
+
+  A dropdown renders the codes the API accepts — they come only from the
+  documents, so never write an option list of your own:
+
+      <Select value={form.gender ?? ''} onChange={(e) => setField('gender', e.target.value)}>
+        <option value="">Select…</option>
+        {fieldOptions.gender?.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </Select>
+
+  A field marked "input" has no documented codes: an <Input>, never a <Select>.
+  Dates are <Input type="date" />; amounts and counts <Input inputMode="decimal" />.
+  Formats the API wants are applied when the request is built — keep what the
+  user typed as they typed it.
+`
+    : ''
+}
+  Everything the flow holds — read any of it on any screen, e.g. a review step
+  or a summary panel. For a dropdown value show its label, not its code:
+  fieldOptions.gender?.find((o) => o.value === form.gender)?.label ?? form.gender
+
+${all}
+
+  Moving on: navigate('<route>'), or navigate('<route>', { state: { data: result } })
+  when a later screen reads what a call returned. Never put form values in state.
+${sending}`
+}
+
 export function codegenUser(
   screen: ScreenPlan,
   appSpec: AppSpec,
@@ -332,7 +503,10 @@ export function codegenUser(
     .map((id) => byId.get(id))
     .filter((e): e is Endpoint => Boolean(e))
 
-  const signatures = used.map(signatureFor).join('\n')
+  const isBound = (endpoint: Endpoint) =>
+    Boolean(plan.flow?.requests.some((r) => r.operationId === endpoint.operationId))
+  const signatures = used.filter((e) => !isBound(e)).map(signatureFor).join('\n')
+  const senderSignatures = used.filter(isBound).map(senderSignatureFor).join('\n')
 
   // Only the types this screen can actually touch, so the prompt stays small.
   const relevantTypeNames = new Set<string>()
@@ -485,8 +659,23 @@ export function codegenUser(
 
   const ownKeys = spec ? capturedFields(spec) : []
 
-  const formBlock =
-    screen.incomingFormType || screen.formType
+  const flow = plan.flow
+  const boundHere = flow
+    ? used.filter((e) => flow.requests.some((r) => r.operationId === e.operationId))
+    : []
+
+  /*
+   * The shared draft and the senders, when the app has a flow module.
+   *
+   * Replaces the router-state "form" hand-off entirely: that passed each
+   * screen's own values one step on, so a five-step flow arrived at Submit
+   * with one step's data, and the body was then written by hand around it.
+   */
+  const flowBlock = flow ? flowSection(flow, ownKeys, boundHere, appSpec, plan, screen) : ''
+
+  const formBlock = flow
+    ? flowBlock
+    : screen.incomingFormType || screen.formType
       ? `
 FORM VALUES
 
@@ -770,11 +959,15 @@ A WAY FORWARD
   the screen's own wording suggests better — that navigates there:
 
       navigate(${navTarget(next.route)}${
-        next.incomingType || next.incomingFormType
-          ? `, { state: { data: ${screen.endpointIds.length ? 'result' : 'incoming'}, form: ${
-              screen.formType ? 'values' : 'carried'
-            } } }`
-          : ''
+        plan.flow
+          ? next.incomingType
+            ? `, { state: { data: ${screen.endpointIds.length ? 'result' : 'incoming'} } }`
+            : ''
+          : next.incomingType || next.incomingFormType
+            ? `, { state: { data: ${screen.endpointIds.length ? 'result' : 'incoming'}, form: ${
+                screen.formType ? 'values' : 'carried'
+              } } }`
+            : ''
       })${fillNote(next.route)}
 
   Put it in <Actions> with the screen's other buttons. If this screen loads or
@@ -824,7 +1017,7 @@ ${screen.hero.sub ? `        sub="${quoted(screen.hero.sub)}"\n` : ''}      />
 
   const summaryRows = ownKeys
     .slice(0, 8)
-    .map((f) => `      { label: '${f.label.replace(/'/g, "\\'")}', value: values.${demoFieldKey(f.label)} },`)
+    .map((f) => `      { label: '${f.label.replace(/'/g, "\\'")}', value: ${plan.flow ? 'form' : 'values'}.${demoFieldKey(f.label)} },`)
     .join('\n')
 
   const asideBlock = screen.aside
@@ -936,8 +1129,20 @@ ${incomingPaths.map((p) => `      ${p}`).join('\n')}
     : ''
 }${formBlock}
 AVAILABLE API — import { ... } from '../lib/api'
-${signatures || '(this screen makes no API calls)'}
+${signatures || (senderSignatures ? '(none directly — see below)' : '(this screen makes no API calls)')}
+${
+  senderSignatures
+    ? `
+REQUESTS BUILT FOR YOU — import { ... } from '../lib/flow'
+${senderSignatures}
 
+  Each one sends the documented request example with what the user entered in
+  the draft laid over it, in the formats the API expects. Call it with no body.
+  Never import the underlying function from '../lib/api', and never assemble a
+  request object yourself — not even partly, not even "just the dates".
+`
+    : ''
+}
 TYPES — import type { ... } from '../lib/types'
 ${[types, formTypes].filter(Boolean).join('\n\n') || '(none)'}
 

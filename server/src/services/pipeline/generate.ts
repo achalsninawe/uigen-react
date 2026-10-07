@@ -18,6 +18,7 @@ import {
   checkResponsesRendered,
   checkUndefinedComponents,
   checkUsesApi,
+  checkFlowUse,
   checkUsesReadHelpers,
   describeViolations,
   type Violation,
@@ -26,8 +27,10 @@ import path from 'node:path'
 import { byFile, describeErrors, typeCheck, type TypeError } from './typecheck.js'
 import { repairPlan, validatePlan, type FlowIssue } from './flow.js'
 import { probeEndpoints } from './probe.js'
+import { bindFlow } from './bind.js'
+import { senderName } from '../emit/flow.js'
 import { config } from '../../config.js'
-import type { AppPlan, AppSpec, ConnectionSettings, GeneratedFile, ScreenPlan } from '../../types.js'
+import type { AppPlan, AppSpec, ConnectionSettings, GeneratedFile, ScreenPlan, SpecDocument } from '../../types.js'
 
 export interface GenerateHooks {
   log?: (message: string, level?: 'info' | 'warn' | 'error') => void
@@ -565,6 +568,12 @@ async function generateScreen(
 ): Promise<{ content: string; violations: Violation[] }> {
   // A screen given endpoints must use them; one given none may legitimately be
   // a pure display screen fed by the previous step.
+  /*
+   * An operation whose body the flow module builds is reached through its
+   * sender, never directly — so that is the call this screen is held to.
+   */
+  const boundOperations = new Set(plan.flow?.requests.map((r) => r.operationId) ?? [])
+  const callName = (id: string) => (boundOperations.has(id) ? senderName(id) : id)
   const expected = screen.endpointIds.filter((id) => allowedApiFunctions.has(id))
 
   /*
@@ -579,8 +588,11 @@ async function generateScreen(
   const withPayloads = expected.map((id) => {
     const endpoint = appSpec.endpoints.find((e) => e.operationId === id)
     const success = endpoint?.responses.find((r) => /^2\d\d$/.test(r.status))
-    return { name: id, returnsValue: Boolean(success?.typeName) && success?.typeName !== 'void' }
+    return { name: callName(id), returnsValue: Boolean(success?.typeName) && success?.typeName !== 'void' }
   })
+  const capturesFields = Boolean(
+    plan.flow && coveredSpec(screen, appSpec.documentedScreens) && screen.formType && !screen.demo,
+  )
   const componentName = screenComponentName(screen)
   const prompt = codegenUser(screen, appSpec, plan, componentName)
 
@@ -608,7 +620,14 @@ async function generateScreen(
             },
           ]
         : []),
-      ...checkUsesApi(content, expected),
+      ...checkUsesApi(content, expected.map(callName)),
+      ...(plan.flow
+        ? checkFlowUse(content, {
+            boundOperations: expected.filter((id) => boundOperations.has(id)),
+            capturesFields,
+            senderFor: senderName,
+          })
+        : []),
       ...(screen.demo ? [] : checkFabricatedData(content, shouldReceiveData)),
       ...checkUsesReadHelpers(content, screen.incomingType === UNDOCUMENTED_RESPONSE),
     ]
@@ -827,6 +846,7 @@ export async function generate(
   existingPlan?: AppPlan,
   connection?: ConnectionSettings,
   sampleData = false,
+  documents: SpecDocument[] = [],
 ): Promise<GenerateResult> {
   const log = hooks.log ?? (() => {})
 
@@ -879,6 +899,18 @@ export async function generate(
     )
   }
   if (allIssues.length === 0) log('Screen flow checks out')
+
+  /*
+   * Decide, once and in code, how what the user enters becomes each request.
+   *
+   * Left to each screen, the submitting one held only its own step's values
+   * and filled the rest of the body with the documented example's test person.
+   * A plan from before this existed gets it now, so regenerating fixes it.
+   */
+  if (!plan.flow) {
+    log('Mapping the form onto the request bodies')
+    plan.flow = await bindFlow(appSpec, plan, documents, log)
+  }
 
   hooks.onPlan?.(plan)
 
