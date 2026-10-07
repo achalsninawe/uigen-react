@@ -8,3 +8,9 @@ data/
 Thumbs.db
 *.log
 .vite/
+
+# TypeScript incremental build output
+*.tsbuildinfo
+
+# Personal scratch scripts (prefix with _ to keep them local)
+server/scripts/_*.ts

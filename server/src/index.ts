@@ -1,5 +1,7 @@
 import express from 'express'
 import cors from 'cors'
+import fs from 'node:fs'
+import path from 'node:path'
 import { config } from './config.js'
 import { HttpError } from './http.js'
 import { authRouter, requireUser } from './routes/auth.js'
@@ -43,6 +45,20 @@ app.get('/api/health', (_req, res) => {
     deployment: config.azureOpenAI.deployment,
   })
 })
+
+/*
+ * The studio itself, when it has been built.
+ *
+ * In development Vite serves it and proxies /api here. Deployed as one
+ * container there is no Vite, so this serves web/dist and answers every
+ * non-API route with index.html, which is what lets a refresh on
+ * /projects/abc land on the app instead of a 404.
+ */
+const webDist = path.join(config.repoRoot, 'web', 'dist')
+if (fs.existsSync(path.join(webDist, 'index.html'))) {
+  app.use(express.static(webDist, { index: false }))
+  app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(webDist, 'index.html')))
+}
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = err instanceof HttpError ? err.status : 500

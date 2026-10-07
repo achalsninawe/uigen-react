@@ -133,7 +133,8 @@ export function checkImports(code: string, screenFileNames: Set<string>): Violat
     '../lib/store',
     // Emitted when a screen receives a response the documents never described.
     '../lib/read',
-    // Emitted for a flow: the shared draft, dropdown codes and request bodies.
+    // Emitted for a flow. Classic builder: the shared draft, dropdown codes and
+    // request bodies. AI builder: its typed navigation between screens.
     '../lib/flow',
   ])
 

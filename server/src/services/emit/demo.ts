@@ -136,7 +136,7 @@ export function DemoNotice({ children }: { children?: ReactNode }) {
         <path d="M12 9v4M12 17h.01" strokeLinecap="round" />
         <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
       </svg>
-      <div className="min-w-0 text-[13px] leading-relaxed text-amber-900">
+      <div className="min-w-0 text-[0.8125rem] leading-relaxed text-amber-900">
         <span className="font-semibold">Sample data.</span>{' '}
         {children ?? 'No API is documented for this screen, so the values below are invented.'}
       </div>

@@ -92,8 +92,18 @@ what has been entered so far.
 The rows in it are filled from real state by the screen itself — you only name
 the panel. Leave aside out on a list, a table, or a screen with no form.
 
+JOURNEY OR DESTINATIONS
+
+journey — true ONLY when the screens are steps of one process a person walks in
+order, each finished before the next: an application form split over pages,
+quote → review → pay → confirm. The screens are then numbered "Step 01 / 04".
+false for everything else: dashboards, lists and their detail pages, lookups,
+settings, and any set of screens a person can open in any order. Documents that
+list several screens are NOT a journey by that fact alone — a policy list, a
+policy detail and a claims page are three destinations. When unsure, false.
+
 OUTPUT
-Return a single JSON object: { screens, theme, designNotes }.
+Return a single JSON object: { screens, theme, journey, designNotes }.
 
 The field naming matters. Each section's endpoint list MUST be called
 "endpoints" and MUST contain operationId strings. A screen whose sections list
@@ -117,6 +127,7 @@ single most important field in your reply:
     }
   ],
   "theme": { "accent": "#3B5BDB", "mood": "calm", "density": "comfortable" },
+  "journey": false,
   "designNotes": ["..."]
 }
 designNotes: short notes to the screen author about anything non-obvious —

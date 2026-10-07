@@ -1,4 +1,12 @@
-import type { AppSpec, ConnectionSettings, PipelineEvent, Project, ProjectSummary, PublicUser } from './types'
+import type {
+  AppSpec,
+  ConnectionSettings,
+  EndpointTest,
+  PipelineEvent,
+  Project,
+  ProjectSummary,
+  PublicUser,
+} from './types'
 
 export interface CallRecord {
   operationId: string
@@ -105,6 +113,39 @@ export const api = {
       body: JSON.stringify({ sampleData }),
     }).then((r) => r.project),
 
+  /** Which generator builds the app. Applies on the next generate. */
+  /** Recolours the app at once; every screen's colours are mixed from this one. */
+  setAccent: (id: string, accent: string) =>
+    request<{ project: Project }>(`/api/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ accent }),
+    }).then((r) => r.project),
+
+  /** Rescales all text in the app at once. */
+  setTextSize: (id: string, textSize: 'small' | 'default' | 'large') =>
+    request<{ project: Project }>(`/api/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ textSize }),
+    }).then((r) => r.project),
+
+  setGenerator: (id: string, generator: 'classic' | 'ai') =>
+    request<{ project: Project }>(`/api/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ generator }),
+    }).then((r) => r.project),
+
+  /** Reads a brand theme from style files. Applies on the next generate. */
+  uploadTheme: (id: string, files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    return request<{ project: Project }>(`/api/projects/${id}/theme`, { method: 'POST', body: form }).then(
+      (r) => r.project,
+    )
+  },
+
+  removeTheme: (id: string) =>
+    request<{ project: Project }>(`/api/projects/${id}/theme`, { method: 'DELETE' }).then((r) => r.project),
+
   saveConnection: (id: string, connection: ConnectionSettings) =>
     request<{ project: Project }>(`/api/projects/${id}`, {
       method: 'PATCH',
@@ -115,23 +156,23 @@ export const api = {
 
   clearCalls: (id: string) => request<void>(`/api/projects/${id}/calls`, { method: 'DELETE' }),
 
-  /** Calls an endpoint for real and records the shape of what comes back. */
-  learnShape: (
+  /** Calls one endpoint for real; the verdict lands on the endpoint as `lastTest`. */
+  testEndpoint: (
     id: string,
     operationId: string,
     payload: { pathParams?: Record<string, unknown>; query?: Record<string, unknown>; body?: unknown },
   ) =>
-    request<{
-      rootTypeName: string
-      learned: { name: string; fields: number }[]
-      status: number
-      url: string
-      durationMs: number
-      project: Project
-    }>(`/api/projects/${id}/endpoints/${operationId}/learn`, {
+    request<{ test: EndpointTest; project: Project }>(`/api/projects/${id}/endpoints/${operationId}/test`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  /** Tests every endpoint it can. Writes only run when `includeWrites` is true. */
+  testAllEndpoints: (id: string, includeWrites: boolean) =>
+    request<{ project: Project }>(`/api/projects/${id}/endpoints/test-all`, {
+      method: 'POST',
+      body: JSON.stringify({ includeWrites }),
+    }).then((r) => r.project),
 
   saveFile: (id: string, path: string, content: string) =>
     request<{ ok: true }>(`/api/projects/${id}/files`, {
@@ -180,9 +221,10 @@ export const api = {
  * the connection is closed explicitly at every terminal point.
  */
 /** Stream URL for another pass at the screens already generated. */
-export const repairUrl = (id: string, note?: string, mode: 'fix' | 'refine' = 'fix') => {
+export const repairUrl = (id: string, note?: string, mode: 'fix' | 'refine' = 'fix', screenId?: string) => {
   const query = new URLSearchParams({ mode })
   if (note) query.set('note', note)
+  if (screenId) query.set('screen', screenId)
   return `/api/projects/${id}/repair?${query.toString()}`
 }
 

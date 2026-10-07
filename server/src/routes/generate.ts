@@ -4,10 +4,13 @@ import { ownedProject } from './auth.js'
 import { store } from '../services/store.js'
 import { aiAvailable } from '../services/azure.js'
 import { generate, repairApp } from '../services/pipeline/generate.js'
+import { aiGenerate, aiRepairApp } from '../services/pipeline/aiGenerate.js'
 import { toWireProject } from '../serialize.js'
+import { readStyleIntent } from '../services/styleIntent.js'
+import { reemitStyle } from '../services/emit/index.js'
 import { clearCalls, readCalls } from '../services/netlog.js'
 import type { EmitContext } from '../services/emit/index.js'
-import type { PipelineEvent } from '../types.js'
+import { ROOT_SIZE, generatorFor, type AppPlan, type GeneratedFile, type PipelineEvent, type ScreenPlan } from '../types.js'
 
 export const generateRouter = Router()
 
@@ -44,6 +47,10 @@ generateRouter.get(
       ...(project.connection.baseUrlOverride
         ? { baseUrlOverride: project.connection.baseUrlOverride }
         : {}),
+      ...(project.brandTheme ? { brand: project.brandTheme } : {}),
+      ...(project.accent ? { accent: project.accent } : {}),
+      ...(project.textSize && project.textSize !== 'default' ? { rootSize: ROOT_SIZE[project.textSize] } : {}),
+      ...(project.screenLooks ? { screenLooks: project.screenLooks } : {}),
     }
 
     try {
@@ -52,24 +59,31 @@ generateRouter.get(
       await store.save(project)
       send({ type: 'status', status: project.status, message: 'Designing your app' })
 
-      const result = await generate(
-        project.appSpec,
-        ctx,
-        {
-          log: (message, level = 'info') => send({ type: 'log', level, message }),
-          onPlan: (plan) => {
-            send({ type: 'plan', plan })
-            send({ type: 'status', status: 'generating', message: `Building ${plan.screens.length} screens` })
-          },
-          onFile: (file) => send({ type: 'file', file }),
-          onScreenStart: (screen) => send({ type: 'screen-start', screenId: screen.id, name: screen.name }),
-          onScreenDone: (screen, path) => send({ type: 'screen-done', screenId: screen.id, path }),
+      const hooks = {
+        log: (message: string, level: 'info' | 'warn' | 'error' = 'info') => send({ type: 'log', level, message }),
+        onPlan: (plan: AppPlan) => {
+          send({ type: 'plan', plan })
+          send({ type: 'status', status: 'generating', message: `Building ${plan.screens.length} screens` })
         },
-        replan ? undefined : project.plan,
-        project.connection,
-        sampleData,
-        project.documents,
-      )
+        onFile: (file: GeneratedFile) => send({ type: 'file', file }),
+        onScreenStart: (screen: ScreenPlan) => send({ type: 'screen-start', screenId: screen.id, name: screen.name }),
+        onScreenDone: (screen: ScreenPlan, path: string) => send({ type: 'screen-done', screenId: screen.id, path }),
+      }
+
+      // The AI builder designs afresh every run: the design is one call, and
+      // a stale one is exactly the kind of upstream guess it exists to avoid.
+      const result =
+        generatorFor(project) === 'ai'
+          ? await aiGenerate(project.appSpec, project.documents, ctx, hooks, project.connection, sampleData)
+          : await generate(
+              project.appSpec,
+              ctx,
+              hooks,
+              replan || project.plan?.builder === 'ai' ? undefined : project.plan,
+              project.connection,
+              sampleData,
+              project.documents,
+            )
 
       project.plan = result.plan
       project.files = result.files
@@ -129,6 +143,9 @@ generateRouter.get(
 
     const note = typeof req.query.note === 'string' ? req.query.note.slice(0, 2000) : undefined
     const mode = req.query.mode === 'refine' ? 'refine' : 'fix'
+    // One screen, when the person picked one; otherwise every screen gets a look.
+    const screenId = typeof req.query.screen === 'string' && req.query.screen ? req.query.screen : undefined
+    if (screenId && !note?.trim()) throw badRequest('Say what should change on that screen')
     const stream = openEventStream(res)
     const send = (event: PipelineEvent) => stream.send(event)
 
@@ -141,16 +158,72 @@ generateRouter.get(
         message: mode === 'refine' ? 'Refining the screens' : 'Looking at the generated screens',
       })
 
-      const result = await repairApp(
-        project.appSpec,
-        project.plan,
-        project.files,
-        { note, mode },
-        {
-          log: (message, level = 'info') => send({ type: 'log', level, message }),
-          onFile: (file) => send({ type: 'file', file }),
-        },
-      )
+      /*
+       * Colour and text size are app settings no screen can change, so a note
+       * asking for them is applied as one, whichever screen was picked.
+       */
+      const style = note ? readStyleIntent(note) : { styleOnly: false }
+      /*
+       * With one screen picked, its look changes and the app's does not —
+       * unless the note says the whole app.
+       */
+      const target =
+        screenId && !(note && /(whole|entire|all|every|everything|app)/i.test(note))
+          ? project.plan.screens.find((s) => s.id === screenId)
+          : undefined
+      if (target && (style.accent || style.textSize)) {
+        const look = { ...target.look }
+        if (style.accent) look.accent = style.accent.hex
+        if (style.textSize === 'default') delete look.textSize
+        else if (style.textSize) look.textSize = style.textSize
+        if (look.accent || look.textSize) target.look = look
+        else delete target.look
+        project.screenLooks = { ...project.screenLooks, [target.name]: look }
+        if (!target.look) delete project.screenLooks[target.name]
+        const what = [style.accent && `color ${style.accent.name}`, style.textSize && `text size ${style.textSize}`]
+          .filter(Boolean)
+          .join(' and ')
+        send({ type: 'log', level: 'info', message: `${target.name}: ${what}, on this screen only` })
+        project.files = reemitStyle(project.files, project.appSpec, project.plan)
+      } else if (style.accent || style.textSize) {
+        if (style.accent) {
+          project.accent = style.accent.hex
+          project.plan.theme.accent = style.accent.hex
+          send({ type: 'log', level: 'info', message: `App color set to ${style.accent.name} on every screen` })
+        }
+        if (style.textSize) {
+          project.textSize = style.textSize
+          if (style.textSize === 'default') delete project.plan.theme.rootSize
+          else project.plan.theme.rootSize = ROOT_SIZE[style.textSize]
+          send({ type: 'log', level: 'info', message: `Text size set to ${style.textSize} on every screen` })
+        }
+        project.files = reemitStyle(project.files, project.appSpec, project.plan)
+      }
+
+      if (style.styleOnly) {
+        // Nothing left for the model, and asking anyway would only add classes the theme overrides.
+        project.status = 'ready'
+        delete project.error
+        await store.save(project)
+        send({ type: 'status', status: 'ready', message: 'Theme updated' })
+        send({ type: 'done', project: toWireProject(project) })
+        return
+      }
+
+      const repairHooks = {
+        log: (message: string, level: 'info' | 'warn' | 'error' = 'info') => send({ type: 'log', level, message }),
+        onFile: (file: GeneratedFile) => send({ type: 'file', file }),
+      }
+      const modelNote =
+        style.accent || style.textSize
+          ? `${note}\n\n(The app color and text size were already changed in the theme. Do not add color or font-size classes; make only the other changes.)`
+          : note
+      const options = { note: modelNote, mode: mode as 'fix' | 'refine', ...(screenId ? { screenId } : {}) }
+      // Repaired by whichever generator made the app, with the context it had.
+      const result =
+        project.plan.builder === 'ai'
+          ? await aiRepairApp(project.appSpec, project.documents, project.plan, project.files, options, repairHooks)
+          : await repairApp(project.appSpec, project.plan, project.files, options, repairHooks)
 
       project.files = result.files
       project.status = 'ready'

@@ -32,9 +32,9 @@ const buttonVariants: Record<ButtonVariant, string> = {
 }
 
 const buttonSizes: Record<ButtonSize, string> = {
-  sm: 'h-8 px-3 text-[13px] gap-1.5 rounded-lg',
+  sm: 'h-8 px-3 text-[0.8125rem] gap-1.5 rounded-lg',
   md: 'h-10 px-4 text-sm gap-2 rounded-xl',
-  lg: 'h-12 px-6 text-[15px] gap-2.5 rounded-xl',
+  lg: 'h-12 px-6 text-[0.9375rem] gap-2.5 rounded-xl',
 }
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -148,8 +148,8 @@ export function CardHeader({
   return (
     <div className={cn('flex items-start justify-between gap-4 border-b border-line px-5 py-4', className)}>
       <div className="min-w-0">
-        <h3 className="truncate text-[15px] font-semibold text-slate-900">{title}</h3>
-        {subtitle && <p className="mt-0.5 text-[13px] text-slate-500">{subtitle}</p>}
+        <h3 className="truncate text-[0.9375rem] font-semibold text-slate-900">{title}</h3>
+        {subtitle && <p className="mt-0.5 text-[0.8125rem] text-slate-500">{subtitle}</p>}
       </div>
       {renderAction(action)}
     </div>
@@ -199,11 +199,11 @@ export function Hero({
     >
       <div className="relative z-10 max-w-xl">
         {eyebrow && (
-          <span className="inline-flex items-center rounded-full bg-white/75 px-3 py-1 text-[11px] font-semibold tracking-[0.12em] text-accent uppercase ring-1 ring-white/70">
+          <span className="inline-flex items-center rounded-full bg-white/75 px-3 py-1 text-[0.6875rem] font-semibold tracking-[0.12em] text-accent uppercase ring-1 ring-white/70">
             {eyebrow}
           </span>
         )}
-        <h2 className={cn('text-[26px] leading-tight font-bold tracking-tight text-slate-900 sm:text-[30px]', eyebrow && 'mt-4')}>
+        <h2 className={cn('text-[1.625rem] leading-tight font-bold tracking-tight text-slate-900 sm:text-[1.875rem]', eyebrow && 'mt-4')}>
           {headline}
         </h2>
         {sub && <p className="mt-3 text-sm leading-relaxed text-slate-600">{sub}</p>}
@@ -279,7 +279,7 @@ export function Note({
   return (
     <div
       className={cn(
-        'flex items-start gap-2.5 rounded-xl px-4 py-3 text-[12.5px] leading-relaxed ring-1',
+        'flex items-start gap-2.5 rounded-xl px-4 py-3 text-[0.7813rem] leading-relaxed ring-1',
         // A note is nearly always a remark about what sits above it, so it
         // carries its own separation rather than relying on each screen.
         '[&:not(:first-child)]:mt-5',
@@ -435,15 +435,15 @@ export function Field({
     // run-together block rather than a form. Last child drops it so the card
     // padding is not doubled.
     <label className={cn('block [&:not(:last-child)]:mb-4', fieldSpans[span], className)}>
-      <span className="mb-1.5 flex items-center gap-1 text-[12px] font-semibold text-slate-700">
+      <span className="mb-1.5 flex items-center gap-1 text-[0.75rem] font-semibold text-slate-700">
         {label}
         {required && <span className="text-rose-500">*</span>}
       </span>
       {children}
       {error ? (
-        <span className="mt-1 block text-[11.5px] font-medium text-rose-600">{error}</span>
+        <span className="mt-1 block text-[0.7188rem] font-medium text-rose-600">{error}</span>
       ) : hint ? (
-        <span className="mt-1 block text-[11.5px] text-slate-500">{hint}</span>
+        <span className="mt-1 block text-[0.7188rem] text-slate-500">{hint}</span>
       ) : null}
     </label>
   )
@@ -474,7 +474,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11.5px] font-semibold',
+        'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[0.7188rem] font-semibold',
         badgeTones[tone],
         className,
       )}
@@ -522,9 +522,9 @@ export function PageHeader({
     <div className={cn('mb-6 flex flex-wrap items-start justify-between gap-4', className)}>
       <div className="min-w-0">
         {eyebrow && (
-          <p className="mb-2 text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">{eyebrow}</p>
+          <p className="mb-2 text-[0.6875rem] font-semibold tracking-[0.14em] text-accent uppercase">{eyebrow}</p>
         )}
-        <h1 className="text-[28px] leading-tight font-bold tracking-tight text-slate-900">{title}</h1>
+        <h1 className="text-[1.75rem] leading-tight font-bold tracking-tight text-slate-900">{title}</h1>
         {description && <p className="mt-1.5 max-w-2xl text-sm text-slate-500">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{rendered}</div>}
@@ -589,7 +589,7 @@ export function EmptyState({
           </svg>
         )}
       </div>
-      <p className="mt-4 text-[15px] font-semibold text-slate-900">{title}</p>
+      <p className="mt-4 text-[0.9375rem] font-semibold text-slate-900">{title}</p>
       {description && <p className="mt-1.5 max-w-sm text-sm text-slate-500">{description}</p>}
       {action && <div className="mt-5">{renderAction(action)}</div>}
     </div>
@@ -607,7 +607,7 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
           <circle cx="12" cy="12" r="9" />
         </svg>
       </div>
-      <p className="mt-4 text-[15px] font-semibold text-slate-900">Request failed</p>
+      <p className="mt-4 text-[0.9375rem] font-semibold text-slate-900">Request failed</p>
       <p className="mt-1.5 max-w-md text-sm break-words text-slate-500">{message}</p>
       {onRetry && (
         <button
@@ -753,7 +753,7 @@ export function DataTable<T>({
                 key={i}
                 style={column.width ? { width: column.width } : undefined}
                 className={cn(
-                  'px-5 py-3 text-left text-[11.5px] font-semibold uppercase tracking-wide text-slate-500',
+                  'px-5 py-3 text-left text-[0.7188rem] font-semibold uppercase tracking-wide text-slate-500',
                   column.className,
                 )}
               >
@@ -800,11 +800,11 @@ export function Stat({
   return (
     <div className="rounded-2xl bg-white p-5 ring-1 ring-line shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_-16px_rgba(15,23,42,0.18)]">
       <div className="flex items-center justify-between">
-        <span className="text-[12px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+        <span className="text-[0.75rem] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
         {icon && <span className="grid size-8 place-items-center rounded-lg bg-accent-soft text-accent">{icon}</span>}
       </div>
       <p className="mt-2 text-2xl font-bold tabular-nums text-slate-900">{value}</p>
-      {hint && <p className="mt-1 text-[12px] text-slate-500">{hint}</p>}
+      {hint && <p className="mt-1 text-[0.75rem] text-slate-500">{hint}</p>}
     </div>
   )
 }
@@ -835,14 +835,14 @@ export function SummaryPanel({
   return (
     <div className={cn('overflow-hidden rounded-2xl bg-accent-deep text-white shadow-lg', className)}>
       <div className="px-5 pt-5 pb-4">
-        <p className="text-[10.5px] font-semibold tracking-[0.16em] text-white/55 uppercase">{title}</p>
-        {headline && <p className="mt-2.5 text-[19px] leading-snug font-bold">{headline}</p>}
+        <p className="text-[0.6563rem] font-semibold tracking-[0.16em] text-white/55 uppercase">{title}</p>
+        {headline && <p className="mt-2.5 text-[1.1875rem] leading-snug font-bold">{headline}</p>}
       </div>
       <dl className="divide-y divide-white/10 border-t border-white/10">
         {items.map((item, i) => (
           <div key={i} className="flex items-baseline justify-between gap-4 px-5 py-2.5">
-            <dt className="text-[12.5px] text-white/60">{item.label}</dt>
-            <dd className="min-w-0 text-right text-[13px] font-semibold tabular-nums">
+            <dt className="text-[0.7813rem] text-white/60">{item.label}</dt>
+            <dd className="min-w-0 text-right text-[0.8125rem] font-semibold tabular-nums">
               {item.value === undefined || item.value === null || item.value === '' ? (
                 <span className="text-white/35">—</span>
               ) : (
@@ -853,7 +853,7 @@ export function SummaryPanel({
         ))}
       </dl>
       {footer && (
-        <div className="border-t border-white/10 px-5 py-4 text-[12.5px] leading-relaxed text-white/70">
+        <div className="border-t border-white/10 px-5 py-4 text-[0.7813rem] leading-relaxed text-white/70">
           {footer}
         </div>
       )}
@@ -867,8 +867,8 @@ export function DetailList({ items }: { items: { label: ReactNode; value: ReactN
     <dl className="divide-y divide-slate-50">
       {items.map((item, i) => (
         <div key={i} className="flex gap-4 px-5 py-3">
-          <dt className="w-44 shrink-0 text-[13px] font-medium text-slate-500">{item.label}</dt>
-          <dd className="min-w-0 flex-1 text-[13px] break-words text-slate-900">{item.value}</dd>
+          <dt className="w-44 shrink-0 text-[0.8125rem] font-medium text-slate-500">{item.label}</dt>
+          <dd className="min-w-0 flex-1 text-[0.8125rem] break-words text-slate-900">{item.value}</dd>
         </div>
       ))}
     </dl>
@@ -881,7 +881,7 @@ export function Value({ value }: { value: unknown }) {
   if (typeof value === 'boolean') return <span>{value ? 'Yes' : 'No'}</span>
   if (typeof value === 'object') {
     return (
-      <pre className="overflow-x-auto rounded-lg bg-slate-50 p-2.5 font-mono text-[11.5px] text-slate-600">
+      <pre className="overflow-x-auto rounded-lg bg-slate-50 p-2.5 font-mono text-[0.7188rem] text-slate-600">
         {JSON.stringify(value, null, 2)}
       </pre>
     )

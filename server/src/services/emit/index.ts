@@ -60,7 +60,7 @@ export function emitFoundation(appSpec: AppSpec, plan: AppPlan, ctx: EmitContext
     file('package.json', emitPackageJson(appSpec, ctx)),
     file('vite.config.ts', emitViteConfig(ctx)),
     file('tsconfig.json', emitTsConfig()),
-    file('index.html', emitIndexHtml(appSpec)),
+    file('index.html', emitIndexHtml(appSpec, plan)),
     file('README.md', emitReadme(appSpec, plan, ctx)),
 
     // API layer — generated from the extracted endpoints, never by a model
@@ -153,4 +153,30 @@ export function reemitForTarget(
       }),
     ...emitBffFiles(appSpec, ctx),
   ]
+}
+
+/**
+ * Re-emits only what decides how the app looks — the stylesheet, the component
+ * kit, the layout — so a new colour or text size reaches every screen at once
+ * and no screen is regenerated. The kit comes along because an app built
+ * before its sizes were relative carries one that a text size cannot scale.
+ */
+export function reemitStyle(files: GeneratedFile[], appSpec: AppSpec, plan: AppPlan): GeneratedFile[] {
+  const replacements = new Map<string, string>([
+    ['src/index.css', emitIndexCss(plan)],
+    ['src/components/ui/cn.ts', UI_CN],
+    ['src/components/ui/primitives.tsx', UI_PRIMITIVES],
+    ['src/components/ui/feedback.tsx', UI_FEEDBACK],
+    ['src/components/ui/data.tsx', UI_DATA],
+    ['src/components/ui/overlay.tsx', UI_OVERLAY],
+    ['src/components/ui/index.ts', UI_INDEX],
+    ['src/components/Layout.tsx', emitLayout(appSpec, plan)],
+    // Per-screen looks live on the element around each route.
+    ['src/App.tsx', emitApp(plan)],
+    ['src/components/DemoNotice.tsx', DEMO_NOTICE],
+  ])
+  return files.map((f) => {
+    const replacement = replacements.get(f.path)
+    return replacement !== undefined ? { ...f, content: replacement } : f
+  })
 }

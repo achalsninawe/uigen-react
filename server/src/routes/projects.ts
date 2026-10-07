@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { reemitStyle } from '../services/emit/index.js'
 import multer from 'multer'
 import path from 'node:path'
 import { asyncRoute, badRequest, notFound, param } from '../http.js'
@@ -6,8 +7,10 @@ import { ownedProject, ownedProjectMeta, ownerOf } from './auth.js'
 import { storage } from '../services/blobs.js'
 import { newId, store } from '../services/store.js'
 import { parseFile } from '../services/parsers/index.js'
+import { aiAvailable } from '../services/azure.js'
+import { extractBrandTheme } from '../services/brand.js'
 import { toWireProject } from '../serialize.js'
-import type { SpecDocument } from '../types.js'
+import { ROOT_SIZE, type SpecDocument, type TextSize } from '../types.js'
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -122,6 +125,9 @@ projectsRouter.patch(
       name?: string
       connection?: Partial<typeof project.connection>
       sampleData?: boolean
+      generator?: 'classic' | 'ai'
+      accent?: string
+      textSize?: TextSize
     }
     if (typeof body.name === 'string' && body.name.trim()) {
       const wanted = body.name.trim()
@@ -132,7 +138,75 @@ projectsRouter.patch(
     }
     if (body.connection) project.connection = { ...project.connection, ...body.connection }
     if (typeof body.sampleData === 'boolean') project.sampleData = body.sampleData
+    if (body.generator === 'classic' || body.generator === 'ai') project.generator = body.generator
+    if (body.accent !== undefined) {
+      if (typeof body.accent !== 'string' || !/^#[0-9a-f]{6}$/i.test(body.accent)) {
+        throw badRequest('The colour must look like #2563EB')
+      }
+      project.accent = body.accent
+      if (project.plan) project.plan.theme.accent = body.accent
+    }
+    if (body.textSize !== undefined) {
+      if (!(body.textSize in ROOT_SIZE)) throw badRequest('Text size must be small, default or large')
+      project.textSize = body.textSize
+      if (project.plan) {
+        if (body.textSize === 'default') delete project.plan.theme.rootSize
+        else project.plan.theme.rootSize = ROOT_SIZE[body.textSize]
+      }
+    }
+    /*
+     * Every colour is mixed from one token and every size is relative to one
+     * root, so re-emitting the style files restyles every screen without
+     * touching any of them.
+     */
+    if ((body.accent !== undefined || body.textSize !== undefined) && project.plan && project.appSpec) {
+      project.files = reemitStyle(project.files, project.appSpec, project.plan)
+    }
 
+    await store.save(project)
+    res.json({ project: toWireProject(project) })
+  }),
+)
+
+/**
+ * Reads a brand theme out of uploaded style files — CSS, SCSS, design tokens,
+ * a Markdown or text brand guide, HTML, PDF, DOCX.
+ *
+ * Only the extracted theme is kept, not the files: they are style, not
+ * specification, and must never reach the analysis as if they described the
+ * app. Applies on the next generate.
+ */
+projectsRouter.post(
+  '/:id/theme',
+  upload.array('files', 5),
+  asyncRoute(async (req, res) => {
+    const project = await ownedProject(req, param(req, 'id'))
+    const files = (req.files as Express.Multer.File[] | undefined) ?? []
+    if (files.length === 0) throw badRequest('Upload a theme file')
+    if (!aiAvailable()) throw badRequest('Reading a theme needs Azure OpenAI — set AZURE_OPENAI_API_KEY in .env')
+
+    const documents = []
+    for (const file of files) {
+      const parsed = await parseFile(file.originalname, file.buffer)
+      if (parsed.text.trim()) documents.push({ filename: file.originalname, text: parsed.text })
+    }
+    if (documents.length === 0) throw badRequest('Could not read any text from the theme file')
+
+    try {
+      project.brandTheme = await extractBrandTheme(documents)
+    } catch (err) {
+      throw badRequest(err instanceof Error ? err.message : 'Could not read a theme from that file')
+    }
+    await store.save(project)
+    res.json({ project: toWireProject(project) })
+  }),
+)
+
+projectsRouter.delete(
+  '/:id/theme',
+  asyncRoute(async (req, res) => {
+    const project = await ownedProject(req, param(req, 'id'))
+    delete project.brandTheme
     await store.save(project)
     res.json({ project: toWireProject(project) })
   }),

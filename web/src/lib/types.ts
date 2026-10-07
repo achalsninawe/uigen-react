@@ -80,9 +80,44 @@ export interface Endpoint {
   queryParams: ParamSpec[]
   requestBody?: BodySpec
   responses: ResponseSpec[]
+  /** True when the verb was assumed because no document stated one. */
+  methodAssumed?: boolean
   sourceQuote?: string
   sourceDocumentId?: string
+  /** True when a human edited this endpoint in the inspector. */
   edited?: boolean
+  /** The most recent live test of this endpoint, if one has run. */
+  lastTest?: EndpointTest
+  /**
+   * What the person typed the last time they tested this endpoint on its own.
+   * Test all sends these rather than the documents' examples, which are
+   * usually invented values ("P001234567") the real system does not have.
+   */
+  lastTestInput?: TestInput
+}
+
+export interface TestInput {
+  pathParams?: Record<string, unknown>
+  query?: Record<string, unknown>
+  body?: unknown
+}
+
+/**
+ * One live call made to check an endpoint works.
+ *
+ * `skipped` means it was never called — a write when writes were not allowed,
+ * or a path parameter nothing could supply — and says why in `message`.
+ */
+export interface EndpointTest {
+  state: 'pass' | 'fail' | 'skipped'
+  message: string
+  at: string
+  status?: number
+  durationMs?: number
+  url?: string
+  /** Set when a 2xx response taught the endpoint its response shape. */
+  typeName?: string
+  fields?: number
 }
 
 export interface EntityField {
@@ -128,6 +163,11 @@ export interface AppSpec {
   flows: Flow[]
   gaps: Gap[]
   servers: string[]
+  /**
+   * 'manual' once someone has put the endpoints in order by hand. Test all then
+   * calls them in exactly that order instead of reads-first, lists-first.
+   */
+  callOrder?: 'manual'
 }
 
 export type ScreenType =
@@ -143,6 +183,8 @@ export interface ScreenSection {
 export interface ScreenPlan {
   id: string
   name: string
+  /** This screen's own colour and text size, over the app's. */
+  look?: { accent?: string; textSize?: 'small' | 'default' | 'large' }
   route: string
   type: ScreenType
   purpose: string
@@ -171,10 +213,28 @@ export interface ScreenPlan {
   aside?: { title: string; headline?: string }
 }
 
+/** A brand's look, read from an uploaded style document. */
+export interface BrandTheme {
+  sources: string[]
+  extractedAt: string
+  colors: {
+    primary: string
+    background?: string
+    text?: string
+    muted?: string
+    border?: string
+    danger?: string
+    success?: string
+  }
+  font?: { body?: string; heading?: string; url?: string; baseSize?: number }
+  radius?: number
+  notes: string[]
+}
+
 export interface AppPlan {
   screens: ScreenPlan[]
   navigation: { screenId: string; label: string; icon: string }[]
-  theme: { accent: string; mood: string; density: string }
+  theme: { accent: string; mood: string; density: string; brand?: BrandTheme; rootSize?: number }
   designNotes: string[]
 }
 
@@ -205,6 +265,14 @@ export interface Project {
   connection: ConnectionSettings
   /** Screens no API can feed may show sample data. Absent or false: API-only. */
   sampleData?: boolean
+  /** Which generator builds the app, when chosen. Absent: see `generatorFor`. */
+  generator?: 'classic' | 'ai'
+  /** Brand theme from an uploaded style file. Applies on the next generate. */
+  brandTheme?: BrandTheme
+  /** The app's colour, when the person picked one. */
+  accent?: string
+  /** How large the app's text is, when the person chose. */
+  textSize?: 'small' | 'default' | 'large'
   /** When the person pressed Save. Absent means never saved. */
   savedAt?: string
   publish?: { url: string; publishedAt: string; transport: 'direct' }
@@ -245,3 +313,9 @@ export type PipelineEvent =
   | { type: 'screen-done'; screenId: string; path: string }
   | { type: 'done'; project: Project }
   | { type: 'error'; message: string }
+
+/** No API in the documents → AI builder; an API → classic. An explicit choice wins. Mirrors the server. */
+export function generatorFor(project: Pick<Project, 'generator' | 'appSpec'>): 'classic' | 'ai' {
+  if (project.generator) return project.generator
+  return (project.appSpec?.endpoints.length ?? 0) > 0 ? 'classic' : 'ai'
+}

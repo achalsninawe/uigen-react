@@ -474,6 +474,11 @@ export const planSchema = z.object({
       density: z.enum(['comfortable', 'compact']).default('comfortable'),
     })
     .default({ accent: '#6C63FF', mood: 'calm', density: 'comfortable' }),
+  /**
+   * Whether the screens are steps of one process walked in order. Absent on
+   * older replies; the pipeline then falls back to reading the screen graph.
+   */
+  journey: z.boolean().optional().catch(undefined),
   designNotes: looseStrings.default([]),
 })
 
@@ -548,3 +553,71 @@ export const resetSchema = z.object({
     )
     .default([]),
 })
+
+/* ------------------------------------------------------------------ */
+/* AI builder                                                        */
+/* ------------------------------------------------------------------ */
+
+/** Which endpoints are safe to call once for a real response, and with what. */
+export const samplesSchema = z.object({
+  endpoints: z
+    .array(
+      z.object({
+        operationId: z.string(),
+        /** True only when calling it cannot change data: a read, search, query or quotation. */
+        readOnly: z.boolean().default(false),
+        why: z.string().default(''),
+        pathParams: nullable(z.record(z.unknown()).optional()),
+        query: nullable(z.record(z.unknown()).optional()),
+        body: z.unknown().optional(),
+      }),
+    )
+    .default([]),
+})
+
+export type SamplesResult = z.infer<typeof samplesSchema>
+
+/** The whole app as the AI designs it, before any screen is written. */
+export const designSchema = z.object({
+  /** True when the screens are one journey walked in order, e.g. search → review → submit. */
+  journey: z.boolean().default(false),
+  screens: z
+    .array(
+      z.object({
+        name: z.string(),
+        route: z.string(),
+        type: z
+          .enum(['dashboard', 'list', 'detail', 'form', 'wizard', 'auth', 'settings', 'search', 'empty'])
+          .catch('form'),
+        purpose: z.string().default(''),
+        icon: z.string().default('Square'),
+        showInNav: z.boolean().default(true),
+        hero: nullable(
+          z.object({ eyebrow: z.string().optional(), headline: z.string(), sub: z.string().optional() }).optional(),
+        ),
+        aside: nullable(z.object({ title: z.string(), headline: z.string().optional() }).optional()),
+        /** API functions this screen calls itself. */
+        calls: looseStrings.default([]),
+        /**
+         * TypeScript type of what arrives in router state, written over the
+         * emitted types as `T.Name`, or empty when the screen receives nothing.
+         */
+        receives: z.string().default(''),
+        /** Screens this one navigates to. */
+        navigatesTo: looseStrings.default([]),
+        /** The build brief: what it shows, every field and button, validation, what it passes on. */
+        brief: z.string().default(''),
+      }),
+    )
+    .min(1),
+  theme: z
+    .object({
+      accent: z.string().default('#6C63FF'),
+      mood: z.enum(['calm', 'vivid', 'corporate', 'playful']).catch('calm'),
+      density: z.enum(['comfortable', 'compact']).catch('comfortable'),
+    })
+    .default({ accent: '#6C63FF', mood: 'calm', density: 'comfortable' }),
+  designNotes: looseStrings.default([]),
+})
+
+export type DesignResult = z.infer<typeof designSchema>

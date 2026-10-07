@@ -1,4 +1,5 @@
 import type { GeneratedFile } from './types'
+import DEMO_PLAYER from './demo-player.js?raw'
 
 /**
  * Translates the stored Vite project into a file set Sandpack can run.
@@ -21,6 +22,9 @@ const SKIP = new Set([
   // Vite entry as well gives the bundler two entry points to choose between.
   'src/main.tsx',
 ])
+
+const DEFAULT_FONT_URL =
+  'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap'
 
 const FALLBACK_THEME = `--font-sans: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, sans-serif;
     --color-accent: #6C63FF;
@@ -63,11 +67,19 @@ function previewCss(): string {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html {
+  font-size: var(--brand-root-size, 16px);
+}
+
 body {
   margin: 0;
   background: var(--color-canvas, #f8fafc);
-  color: #0f172a;
-  font-family: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--color-slate-900, #0f172a);
+  font-family: var(--font-sans, 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif);
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-heading, var(--font-sans, inherit));
 }
 
 :focus-visible {
@@ -85,7 +97,7 @@ body {
  * be added with a script tag — it has to be injected at runtime, before the app
  * mounts, along with the `@theme` block that defines the accent colour.
  */
-function previewEntry(theme: string): string {
+function previewEntry(theme: string, fontUrl: string): string {
   /*
    * Mounts the app itself rather than importing the generated `main`.
    *
@@ -104,6 +116,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { ToastProvider } from './components/ui'
 import App from './App'
 import './index.css'
+import './demo-player.js'
 
 const theme = document.createElement('style')
 theme.type = 'text/tailwindcss'
@@ -116,7 +129,7 @@ document.head.appendChild(theme)
 
 const font = document.createElement('link')
 font.rel = 'stylesheet'
-font.href = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap'
+font.href = ${JSON.stringify(fontUrl)}
 document.head.appendChild(font)
 
 function mount() {
@@ -168,8 +181,16 @@ export function toSandpackBundle(generated: GeneratedFile[]): SandpackBundle {
   }
 
   const theme = themeFrom(generated)
+  // index.html is not shipped to the preview, but it names the font the brand uses.
+  const fontUrl =
+    generated
+      .find((f) => f.path === 'index.html')
+      ?.content.match(/href="(https:\/\/fonts\.googleapis\.com\/css2[^"]+)"/)?.[1]
+      ?.replace(/&amp;/g, '&') ?? DEFAULT_FONT_URL
   files['/src/index.css'] = { code: previewCss(), hidden: true }
-  files['/src/preview-entry.tsx'] = { code: previewEntry(theme), hidden: true }
+  files['/src/preview-entry.tsx'] = { code: previewEntry(theme, fontUrl), hidden: true }
+  // Drives the app on its own when the studio asks for a demo run; idle otherwise.
+  files['/src/demo-player.js'] = { code: DEMO_PLAYER, hidden: true }
 
   // Open the first screen by default — it is what someone wants to look at.
   const firstScreen = generated.find((f) => f.origin === 'model' && f.path.startsWith('src/screens/'))

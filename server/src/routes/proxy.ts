@@ -4,7 +4,7 @@ import { ownedProject, ownedProjectMeta } from './auth.js'
 import { store } from '../services/store.js'
 import { recordCall } from '../services/netlog.js'
 import { callUpstream, type CallPayload } from '../services/upstream.js'
-import { applyObservedShape } from '../services/pipeline/probe.js'
+import { applyObservedShape, looksLikeFailure } from '../services/pipeline/probe.js'
 
 export const proxyRouter = Router()
 
@@ -82,13 +82,7 @@ async function learnFromCall(
 ): Promise<string | undefined> {
   if (outcome.status < 200 || outcome.status >= 300) return undefined
   const body = outcome.body
-  if (body === null || typeof body !== 'object') return undefined
-  if (Array.isArray(body) ? body.length === 0 : Object.keys(body).length === 0) return undefined
-
-  // Flow APIs report failure inside a 200 — `result: 0` and a message. That is
-  // an error's shape, not the success the screens need.
-  const record = body as Record<string, unknown>
-  if (record.result === 0 || record.success === false || 'error' in record || 'errors' in record) return undefined
+  if (looksLikeFailure(body)) return undefined
 
   try {
     // The full project: saving the file-less meta copy would drop the app.

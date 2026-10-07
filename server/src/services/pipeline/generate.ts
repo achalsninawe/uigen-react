@@ -2,6 +2,7 @@ import { chat, chatJson } from '../azure.js'
 import { planSchema } from '../../schemas.js'
 import { PLAN_SYSTEM, planUser } from '../../prompts/plan.js'
 import { CODEGEN_SYSTEM, REFINE_SYSTEM, REPAIR_SYSTEM, codegenUser } from '../../prompts/codegen.js'
+import { applyBrand } from '../brand.js'
 import { emitFoundation, screenComponentName, screenFilePath, type EmitContext } from '../emit/index.js'
 import { withSafeTypeNames } from '../emit/normalise.js'
 import { demoNames } from '../emit/demo.js'
@@ -468,13 +469,17 @@ export async function planScreens(
    * application form: documents that specify screens in order are describing one
    * walk through the product, and flattening "apply, review, pay, confirm" into
    * four interchangeable pages loses the only thing the user wants to know,
-   * which is how much is left. Two signals say it is a sequence — the documents
-   * listed three or more screens in order, or every screen after the first is
-   * fed by the one before it.
+   * which is how much is left.
+   *
+   * The planner says which it is. Counting documented screens used to decide
+   * it, and that numbered every app whose documents listed three screens — a
+   * list, a detail and a settings page came out as "Step 01 / 03", and one
+   * merged screen as "Step 01 / 01". Without the planner's answer, only a
+   * chain where every screen is fed by the one before it counts.
    */
-  const documentedInOrder = appSpec.documentedScreens.length >= 3
   const chained = screens.length >= 3 && screens.slice(1).every((s) => Boolean(s.incomingFrom))
-  if (documentedInOrder || chained) {
+  const journey = screens.length >= 2 && (result.journey ?? chained)
+  if (journey) {
     for (const [index, screen] of screens.entries()) {
       screen.step = { index: index + 1, total: screens.length }
     }
@@ -767,28 +772,40 @@ export async function repairApp(
   rawAppSpec: AppSpec,
   plan: AppPlan,
   files: GeneratedFile[],
-  options: { note?: string; mode?: 'fix' | 'refine' } = {},
+  options: { note?: string; mode?: 'fix' | 'refine'; screenId?: string } = {},
   hooks: GenerateHooks = {},
 ): Promise<{ files: GeneratedFile[]; typeErrors: TypeError[]; compiles: boolean }> {
   const log = hooks.log ?? (() => {})
   const appSpec = withSafeTypeNames(rawAppSpec)
   const note = options.note?.trim()
   const mode = options.mode ?? 'fix'
+  // A chosen screen is the only one the note may change.
+  const chosen = options.screenId ? plan.screens.find((s) => s.id === options.screenId) : undefined
+  if (options.screenId && !chosen) throw new Error('That screen is no longer in the app. Reload and pick again.')
 
-  const screenFiles = files.filter((f) => f.path.startsWith('src/screens/'))
+  const screenFiles = files.filter(
+    (f) => f.path.startsWith('src/screens/') && (!chosen || f.path === screenFilePath(chosen)),
+  )
   if (screenFiles.length === 0) {
     log('No generated screens to fix yet — generate the app first.', 'warn')
     return { files, typeErrors: [], compiles: false }
   }
 
   /*
-   * With a note, every screen gets a look: the person describing a broken
-   * amount rarely knows which file renders it, and guessing wrong here means
-   * the one thing they asked for is the one thing left untouched.
+   * With a note and no chosen screen, every screen gets a look: the person
+   * describing a broken amount rarely knows which file renders it, and
+   * guessing wrong here means the one thing they asked for is the one thing
+   * left untouched. When they did choose, only that screen is touched.
    */
   if (note) {
     const refining = mode === 'refine'
-    log(`${refining ? 'Refining' : 'Looking at'} ${screenFiles.length} screen(s): ${note}`)
+    log(`${refining ? 'Refining' : 'Looking at'} ${chosen ? chosen.name : `${screenFiles.length} screen(s)`}: ${note}`)
+    const scope = chosen
+      ? 'The person chose this screen, so make the change here.'
+      : 'Return it unchanged if the instruction is about a different screen.'
+    const fixScope = chosen
+      ? 'Fix it in this file.'
+      : 'Fix it if this file is the cause, and return the file unchanged if it is not.'
 
     for (const file of screenFiles) {
       const screen = plan.screens.find((s) => screenFilePath(s) === file.path)
@@ -799,7 +816,7 @@ export async function repairApp(
         await chat({
           system: refining ? REFINE_SYSTEM : REPAIR_SYSTEM,
           user: refining
-            ? `Revise this screen as asked. Return it unchanged if the instruction is about a different screen.
+            ? `Revise this screen as asked. ${scope}
 
 INSTRUCTION
 ${note}
@@ -808,7 +825,7 @@ ${codegenUser(screen, appSpec, plan, componentName)}
 
 FILE
 ${file.content}`
-            : `Someone using this screen reported a problem. Fix it if this file is the cause, and return the file unchanged if it is not.
+            : `Someone using this screen reported a problem. ${fixScope}
 
 REPORTED PROBLEM
 ${note}
@@ -880,6 +897,15 @@ export async function generate(
     plan = await planScreens(appSpec, ctx, log, sampleData)
     log(`Planned ${plan.screens.length} screen(s): ${plan.screens.map((s) => s.name).join(', ')}`)
   }
+  // Also on a reused plan: the theme may have been uploaded or removed since.
+  applyBrand(plan, ctx.brand)
+  if (ctx.accent) plan.theme.accent = ctx.accent
+  if (ctx.rootSize) plan.theme.rootSize = ctx.rootSize
+  for (const screen of plan.screens) {
+    const look = ctx.screenLooks?.[screen.name]
+    if (look) screen.look = look
+  }
+  if (ctx.brand) log(`Applying the brand theme from ${ctx.brand.sources.join(', ')}`)
   /*
    * Check the screen graph before writing any code. A screen nothing supplies
    * data to compiles perfectly and shows an empty state for ever, so the

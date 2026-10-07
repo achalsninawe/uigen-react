@@ -303,8 +303,30 @@ function fillNote(route: string): string {
   )
 }
 
+/*
+ * Keys that name one existing record — a policy, proposal, quote, claim.
+ *
+ * A documented example carries the number of the record it created. Handed
+ * that, the model copies it into the screen as a constant, every submit then
+ * names a policy that already exists, and the API acts on that one ("birthdate
+ * not found from policyCustomers") instead of creating a new one. A prompt rule
+ * against it was ignored, so the number is removed before the model sees it.
+ */
+const RECORD_NUMBER =
+  /^(policy|proposal|application|quote|quotation|contract|claim|case|certificate|endorsement)_?(no|num|number|id|code)$/i
+
+function withoutRecordNumbers(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutRecordNumbers)
+  if (value === null || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !RECORD_NUMBER.test(key))
+      .map(([key, child]) => [key, withoutRecordNumbers(child)]),
+  )
+}
+
 /** Endpoint signature exactly as emitted, so the model cannot drift from it. */
-function signatureFor(endpoint: Endpoint): string {
+export function signatureFor(endpoint: Endpoint): string {
   const args: string[] = []
 
   const names = [...endpoint.path.matchAll(/\{([^}]+)\}|:([A-Za-z0-9_]+)/g)].map((m) => m[1] ?? m[2]!)
@@ -507,6 +529,61 @@ export function codegenUser(
     Boolean(plan.flow?.requests.some((r) => r.operationId === endpoint.operationId))
   const signatures = used.filter((e) => !isBound(e)).map(signatureFor).join('\n')
   const senderSignatures = used.filter(isBound).map(senderSignatureFor).join('\n')
+
+  /*
+   * The documented request, for every body this screen sends.
+   *
+   * Given only the body TYPE, the model fills every field the form does not
+   * collect with a zero value. For a body whose parts point at each other —
+   * `insureds[].partyId` naming one of `PolicyCustomers[].partyId` — zero points
+   * at nothing, and the API fails deep inside ("person is null") with the form
+   * looking perfectly filled in. The example is the only place those links are
+   * written down.
+   */
+  // A body the flow module builds is not the screen's to write, so only the
+  // rest are shown here.
+  const requestExamples = used
+    .filter((e) => e.requestBody?.example !== undefined && !isBound(e))
+    .map((e) => {
+      const json = JSON.stringify(withoutRecordNumbers(e.requestBody!.example), null, 2)
+      const clipped = json.length > 8000 ? `${json.slice(0, 8000)}\n  … (truncated)` : json
+      return `  ${e.operationId} — documented example body:\n${clipped.replace(/^/gm, '      ')}`
+    })
+    .join('\n\n')
+
+  const requestBlock = requestExamples
+    ? `
+REQUEST BODIES — build what you send from the documented example
+
+  Fields the user fills in come from the form. For every other field, the
+  example below decides, never a zero value or an empty string:
+
+  - Keys that link one part of the body to another (a partyId, addressId,
+    orderId or similar that appears in several places) keep the example's
+    values and stay consistent with each other. A customer with partyId 1 and
+    an insured, payer or holder with partyId 0 is a body the API cannot resolve.
+  - Codes, flags and settings the form does not ask for (a partyType, a
+    relationTo..., a status, a coverageNo, a paymentMethod) keep the example's
+    value.
+  - A nested list the example fills (a coverage's insureds) is sent filled,
+    not as [].
+  - Personal or descriptive values the form does not collect (a name, income,
+    height) are left out rather than copied from the example.
+  - A number that names ONE record (a policyNumber, proposalNo, applicationId,
+    quoteNo) is never copied from the example: that record already exists, and
+    sending its number again makes the API act on it instead of creating a new
+    one. Send the user's value if the form asks for it, otherwise leave the key
+    out. Only the small linking keys above (1, 2, …) are safe to repeat.
+  - Dates and numbers go in the example's format. If the example sends
+    "2024-05-17T14:40:56", a date input's "2024-05-17" is sent as
+    "2024-05-17T00:00:00". If it sends a number, send a number.
+
+  Hold these fixed values in one constant at the top of the file and merge the
+  form's values into it when submitting, so the links are written once.
+
+${requestExamples}
+`
+    : ''
 
   // Only the types this screen can actually touch, so the prompt stays small.
   const relevantTypeNames = new Set<string>()
@@ -793,7 +870,7 @@ ${storableEntities(appSpec)
       import { persistence, useProjects } from '../lib/store'
       ...
       {!persistence.available && (
-        <div className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-[13px] text-amber-800 ring-1 ring-amber-200">
+        <div className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-[0.8125rem] text-amber-800 ring-1 ring-amber-200">
           This browser is not allowing local storage, so anything you add here
           lasts until you reload.
         </div>
@@ -1130,6 +1207,7 @@ ${incomingPaths.map((p) => `      ${p}`).join('\n')}
 }${formBlock}
 AVAILABLE API — import { ... } from '../lib/api'
 ${signatures || (senderSignatures ? '(none directly — see below)' : '(this screen makes no API calls)')}
+${requestBlock}
 ${
   senderSignatures
     ? `
