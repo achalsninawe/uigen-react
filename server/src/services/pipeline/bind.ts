@@ -1,6 +1,6 @@
 import { chatJson } from '../azure.js'
-import { bindSchema, resetSchema } from '../../schemas.js'
-import { BIND_SYSTEM, RESET_SYSTEM, bindUser, resetUser, type BindPromptInput } from '../../prompts/bind.js'
+import { bindSchema } from '../../schemas.js'
+import { BIND_SYSTEM, bindUser, type BindPromptInput } from '../../prompts/bind.js'
 import { demoFieldKey } from '../emit/demo.js'
 import { capturedFields, coveredSpec } from '../emit/types.js'
 import { flowFields, formatOf, hasBodyExample, leavesOf, normalisePath, readPath } from '../emit/flow.js'
@@ -170,10 +170,7 @@ export async function bindFlow(
   for (const body of bodies) {
     const example = body.requestBody!.example
     const leafPaths = new Set(examples.get(body.operationId)!.map((l) => l.path))
-    // A value the user supplies wins over clearing the same path.
-    const proposed = answer.bindings
-      .filter((b) => b.operationId === body.operationId)
-      .sort((a, b) => Number(Boolean(a.generated)) - Number(Boolean(b.generated)))
+    const proposed = answer.bindings.filter((b) => b.operationId === body.operationId)
     const bindings: BodyBinding[] = []
     const seen = new Set<string>()
 
@@ -212,11 +209,6 @@ export async function bindFlow(
           continue
         }
         bindings.push({ path, response: { operationId: raw.responseOperationId, path: sourcePath }, format })
-      } else if (raw.generated) {
-        // Clearing a fixed number would change what the API is configured with.
-        if (raw.generated === 'empty' && format !== 'string') continue
-        if (raw.generated === 'now' && format !== 'date' && format !== 'datetime') continue
-        bindings.push({ path, generated: raw.generated, format })
       } else {
         continue
       }
@@ -255,83 +247,15 @@ export async function bindFlow(
       )
     }
 
-    /*
-     * What is left goes out exactly as documented — so ask, separately, which of
-     * it was the example's own test record. Asked as part of the mapping above,
-     * this was ignored, and every new policy carried the example's number.
-     */
-    const untouched = examples
-      .get(body.operationId)!
-      .filter((l) => !seen.has(l.path) && typeof l.value === 'string' && l.value !== '')
-    if (untouched.length > 0) {
-      const { reset } = await chatJson({
-        system: RESET_SYSTEM,
-        user: resetUser(
-          body.operationId,
-          untouched.slice(0, MAX_LEAVES).map((l) => `${l.path} = ${showValue(l.value)}`),
-          fields.map((f) => f.label),
-          input.documents,
-        ),
-        schema: resetSchema,
-        temperature: 0,
-        maxTokens: 2000,
-      })
-      for (const item of reset) {
-        const path = normalisePath(item.path)
-        if (!untouched.some((l) => l.path === path) || seen.has(path)) continue
-        const format = formatOf(readPath(example, path))
-        if (item.as === 'now' && format !== 'date' && format !== 'datetime') continue
-        // A one-to-three character value is a code — currency "8", purpose "1" —
-        // and configuration, never a test person's data. Blanking it breaks the call.
-        const value = String(readPath(example, path) ?? '')
-        if (item.as === 'empty' && /^[A-Za-z0-9]{1,3}$/.test(value)) continue
-        bindings.push({ path, generated: item.as, format })
-        seen.add(path)
-      }
-    }
-
-    /*
-     * Test generators stamp one number on everything they make up — "AB598214",
-     * "a598214", "171705598214@…". A value the user does not replace that
-     * carries the same stamp as one they do is from the same test person.
-     */
-    const stamps = new Set(
-      bindings
-        .filter((b) => b.field || b.template)
-        .flatMap((b) => String(readPath(example, b.path) ?? '').match(/\d{5,}/g) ?? []),
-    )
-    const sameTestRecord = examples
-      .get(body.operationId)!
-      .filter(
-        (l) =>
-          !seen.has(l.path) &&
-          typeof l.value === 'string' &&
-          (l.value.match(/\d{5,}/g) ?? []).some((run) => [...stamps].some((s) => run.includes(s) || s.includes(run))),
-      )
-    for (const leaf of sameTestRecord) {
-      bindings.push({ path: leaf.path, generated: 'empty', format: 'string' })
-      seen.add(leaf.path)
-    }
-
     flow.requests.push({ operationId: body.operationId, bindings })
 
     const fromForm = bindings.filter((b) => b.field).length
     const derived = bindings.filter((b) => b.template).length
     const carried = bindings.filter((b) => b.response).length
-    const cleared = bindings.filter((b) => b.generated === 'empty').map((b) => b.path)
-    const stamped = bindings.filter((b) => b.generated === 'now').map((b) => b.path)
     log(
       `${body.operationId}: documented example sent as written, with ${fromForm} value(s) from the form` +
         `${derived ? `, ${derived} derived` : ''}${carried ? `, ${carried} from earlier responses` : ''}`,
     )
-    if (stamped.length) log(`${body.operationId}: set to the time of sending — ${stamped.join(', ')}`)
-    if (cleared.length) {
-      log(
-        `${body.operationId}: sent empty, because the example's value belonged to its test record — ` +
-          `${cleared.join(', ')}. If the API needs any of these, say in the documents where it comes from.`,
-        'warn',
-      )
-    }
   }
 
   /* ------------------------------- dropdowns ------------------------------ */
@@ -413,7 +337,7 @@ export async function bindFlow(
 
   // A missing code list was already reported above, in one place.
   for (const item of answer.unclear) {
-    if (!item.reason || choosable.some((f) => f.key === item.field && !flow.options[f.key])) continue
+    if (!item.reason || flow.options[item.field] || choosable.some((f) => f.key === item.field)) continue
     const label = fields.find((f) => f.key === item.field)?.label ?? item.field
     log(`${label}: ${item.reason}`, 'warn')
   }

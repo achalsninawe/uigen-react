@@ -933,10 +933,10 @@ export async function generate(
    * and filled the rest of the body with the documented example's test person.
    * A plan from before this existed gets it now, so regenerating fixes it.
    */
-  if (!plan.flow) {
-    log('Mapping the form onto the request bodies')
-    plan.flow = await bindFlow(appSpec, plan, documents, log)
-  }
+  // Every run, not only for a plan without one: a mapping kept from an earlier
+  // run keeps that run's mistakes, and regenerating is how they get fixed.
+  log('Mapping the form onto the request bodies')
+  plan.flow = await bindFlow(appSpec, plan, documents, log)
 
   hooks.onPlan?.(plan)
 

@@ -444,12 +444,6 @@ export interface BodyBinding {
   /** A value an earlier call returned, read from the flow's saved responses. */
   response?: { operationId: string; path: string }
   /**
-   * The example's value belonged to its one test record — a policy number, a
-   * submission time, an address line nobody is asked for — and is replaced by
-   * nothing, or by the moment of sending.
-   */
-  generated?: 'empty' | 'now'
-  /**
    * How the value is written, read off the example's own leaf — never chosen
    * by the model, which is how a sample `"2024-05-17T14:40:56"` came back as
    * `"2024-11-11"`. A `datetime` copies the example's exact shape: separator,

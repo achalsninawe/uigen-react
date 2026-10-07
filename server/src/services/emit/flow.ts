@@ -108,9 +108,7 @@ function emitBindings(bindings: BodyBinding[]): string {
         ? `field: ${str(b.field)}`
         : b.template
           ? `template: ${str(b.template)}`
-          : b.generated
-            ? `generated: ${str(b.generated)}`
-            : `response: { operationId: ${str(b.response!.operationId)}, path: ${pathLiteral(b.response!.path)} }`
+          : `response: { operationId: ${str(b.response!.operationId)}, path: ${pathLiteral(b.response!.path)} }`
       return `  { path: ${pathLiteral(b.path)}, ${source}, format: ${str(b.format)} },`
     })
     .join('\n')
@@ -308,8 +306,6 @@ interface Binding {
   field?: keyof FlowForm
   template?: string
   response?: { operationId: string; path: Path }
-  /** The example's own value was test data: sent empty, or as the time of sending. */
-  generated?: 'empty' | 'now'
   format: 'string' | 'number' | 'boolean' | 'date' | 'datetime'
 }
 
@@ -403,12 +399,6 @@ function build(example: unknown, bindings: Binding[], from: Draft): unknown {
       raw = readAt(from.responses[binding.response.operationId], binding.response.path)
       // Nothing came back for it: keep the documented value rather than blank it.
       if (raw === undefined || raw === null) continue
-    } else if (binding.generated === 'now') {
-      const now = new Date()
-      const pad = (n: number) => String(n).padStart(2, '0')
-      raw =
-        \`\${now.getFullYear()}-\${pad(now.getMonth() + 1)}-\${pad(now.getDate())}\` +
-        \`T\${pad(now.getHours())}:\${pad(now.getMinutes())}:\${pad(now.getSeconds())}\`
     }
     writeAt(body, binding.path, formatted(String(raw ?? ''), binding.format, original))
   }

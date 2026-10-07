@@ -112,38 +112,3 @@ ${responses}
 DOCUMENTS
 ${input.documents}`
 }
-
-/**
- * The second, narrower question: of the example values nobody fills in, which
- * belonged only to the example's one test record?
- *
- * Asked inside the binding pass it was ignored — the model was busy mapping
- * thirty fields — and the app went on sending the example's policy number and
- * its test customer's third address line with every new policy.
- */
-export const RESET_SYSTEM = `You review an API request example before an application reuses it for every request it sends.
-
-Each listed value will be sent unchanged, every time, unless you say otherwise. Most of them are configuration and must stay: agent codes, currency, payment method, product parameters, relationship codes, status codes, IDs that link parts of the same request together (partyId 1 used in several places).
-
-Pick out only the values that belonged to the example's one test case and would be wrong or harmful to resend:
-- a policy, proposal, application, transaction or reference number ("now" is never right for these — use "empty")
-- a timestamp of when the example was submitted or created ("now")
-- personal test data — a name, address line, phone, email, ID number — that the form does not ask for ("empty")
-
-Return one JSON object:
-{ "reset": [ { "path": "<path exactly as listed>", "as": "empty" | "now", "why": "<a few words>" } ] }
-
-When in doubt, leave it out: an unnecessary reset can break a request that worked.`
-
-export function resetUser(operationId: string, leaves: string[], formLabels: string[], documents: string): string {
-  return `REQUEST ${operationId}
-
-VALUES SENT UNCHANGED
-${leaves.map((l) => `  ${l}`).join('\n')}
-
-THE FORM ASKS THE USER FOR
-${formLabels.map((l) => `  ${l}`).join('\n')}
-
-DOCUMENTS
-${documents}`
-}

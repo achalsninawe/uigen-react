@@ -526,7 +526,6 @@ export const bindSchema = z.object({
         field: z.string().nullish(),
         template: z.string().nullish(),
         responseOperationId: z.string().nullish(),
-        generated: z.enum(['empty', 'now']).nullish().catch(undefined),
         responsePath: z.string().nullish(),
       }),
     )
@@ -540,18 +539,6 @@ export const bindSchema = z.object({
     )
     .default([]),
   unclear: z.array(z.object({ field: z.string(), reason: z.string().default('') })).default([]),
-})
-
-export const resetSchema = z.object({
-  reset: z
-    .array(
-      z.object({
-        path: z.string(),
-        as: z.enum(['empty', 'now']).catch('empty'),
-        why: z.string().default(''),
-      }),
-    )
-    .default([]),
 })
 
 /* ------------------------------------------------------------------ */
